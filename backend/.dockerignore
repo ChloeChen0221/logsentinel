@@ -1,0 +1,26 @@
+# Docker 容器构建时忽略
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+.git/
+.gitignore
+*.md
+.env
+.env.*
+!.env.example
+data/
+*.db
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+tests/
+*.bak

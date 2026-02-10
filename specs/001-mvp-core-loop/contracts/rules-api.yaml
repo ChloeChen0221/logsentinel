@@ -1,0 +1,461 @@
+openapi: 3.0.3
+info:
+  title: LogSentinel Rules API
+  description: K8s 日志告警平台 - 规则管理 API
+  version: 1.0.0
+  contact:
+    name: LogSentinel Team
+
+servers:
+  - url: http://localhost:8000
+    description: 本地开发环境
+
+tags:
+  - name: rules
+    description: 告警规则管理
+
+paths:
+  /api/rules:
+    get:
+      tags:
+        - rules
+      summary: 查询规则列表
+      description: 获取所有告警规则列表，支持按启用状态筛选
+      parameters:
+        - name: enabled
+          in: query
+          description: 筛选启用状态（true/false）
+          required: false
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: 成功返回规则列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Rule'
+              example:
+                - id: 1
+                  name: "测试错误告警"
+                  enabled: true
+                  severity: "high"
+                  selector_namespace: "demo"
+                  selector_labels: null
+                  match_type: "contains"
+                  match_pattern: "ERROR"
+                  window_seconds: 0
+                  threshold: 1
+                  group_by: ["namespace", "pod"]
+                  cooldown_seconds: 300
+                  last_query_time: "2026-02-04T08:30:00Z"
+                  created_at: "2026-02-04T08:00:00Z"
+                  updated_at: "2026-02-04T08:00:00Z"
+    
+    post:
+      tags:
+        - rules
+      summary: 创建规则
+      description: 创建新的告警规则
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RuleCreate'
+            example:
+              name: "测试错误告警"
+              enabled: true
+              severity: "high"
+              selector_namespace: "demo"
+              selector_labels: null
+              match_type: "contains"
+              match_pattern: "ERROR"
+              window_seconds: 0
+              threshold: 1
+              group_by: ["namespace", "pod"]
+              cooldown_seconds: 300
+      responses:
+        '201':
+          description: 规则创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rule'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: "规则名称不能为空"
+  
+  /api/rules/{rule_id}:
+    get:
+      tags:
+        - rules
+      summary: 查询规则详情
+      description: 根据规则 ID 查询规则详细信息
+      parameters:
+        - name: rule_id
+          in: path
+          description: 规则 ID
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 成功返回规则详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rule'
+        '404':
+          description: 规则不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: "规则不存在"
+    
+    put:
+      tags:
+        - rules
+      summary: 更新规则
+      description: 更新指定规则的配置
+      parameters:
+        - name: rule_id
+          in: path
+          description: 规则 ID
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RuleUpdate'
+      responses:
+        '200':
+          description: 规则更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rule'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 规则不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    
+    delete:
+      tags:
+        - rules
+      summary: 删除规则
+      description: 删除指定规则（级联删除关联的告警记录）
+      parameters:
+        - name: rule_id
+          in: path
+          description: 规则 ID
+          required: true
+          schema:
+            type: integer
+      responses:
+        '204':
+          description: 规则删除成功
+        '404':
+          description: 规则不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  
+  /api/rules/{rule_id}/enable:
+    patch:
+      tags:
+        - rules
+      summary: 启用规则
+      description: 启用指定规则，引擎将开始评估该规则
+      parameters:
+        - name: rule_id
+          in: path
+          description: 规则 ID
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 规则启用成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rule'
+        '404':
+          description: 规则不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  
+  /api/rules/{rule_id}/disable:
+    patch:
+      tags:
+        - rules
+      summary: 停用规则
+      description: 停用指定规则，引擎将停止评估该规则
+      parameters:
+        - name: rule_id
+          in: path
+          description: 规则 ID
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 规则停用成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rule'
+        '404':
+          description: 规则不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    Rule:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: 规则 ID
+          example: 1
+        name:
+          type: string
+          description: 规则名称
+          example: "测试错误告警"
+        enabled:
+          type: boolean
+          description: 启用状态
+          example: true
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+          description: 严重级别
+          example: "high"
+        selector_namespace:
+          type: string
+          description: 命名空间选择器
+          example: "demo"
+        selector_labels:
+          type: object
+          nullable: true
+          description: 标签选择器
+          example: {"app": "myapp"}
+        match_type:
+          type: string
+          enum: [contains, regex]
+          description: 匹配类型
+          example: "contains"
+        match_pattern:
+          type: string
+          description: 匹配模式（关键词或正则表达式）
+          example: "ERROR"
+        window_seconds:
+          type: integer
+          minimum: 0
+          description: 时间窗口（秒，0 表示不使用窗口）
+          example: 0
+        threshold:
+          type: integer
+          minimum: 1
+          description: 阈值（窗口内命中次数）
+          example: 1
+        group_by:
+          type: array
+          items:
+            type: string
+            enum: [namespace, pod, container]
+          description: 分组维度
+          example: ["namespace", "pod"]
+        cooldown_seconds:
+          type: integer
+          minimum: 0
+          description: 冷却时间（秒）
+          example: 300
+        last_query_time:
+          type: string
+          format: date-time
+          nullable: true
+          description: 上次查询时间
+          example: "2026-02-04T08:30:00Z"
+        created_at:
+          type: string
+          format: date-time
+          description: 创建时间
+          example: "2026-02-04T08:00:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: 更新时间
+          example: "2026-02-04T08:00:00Z"
+      required:
+        - id
+        - name
+        - enabled
+        - severity
+        - selector_namespace
+        - match_type
+        - match_pattern
+        - window_seconds
+        - threshold
+        - group_by
+        - cooldown_seconds
+        - created_at
+        - updated_at
+    
+    RuleCreate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: 规则名称
+          example: "测试错误告警"
+        enabled:
+          type: boolean
+          description: 启用状态
+          default: true
+          example: true
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+          description: 严重级别
+          example: "high"
+        selector_namespace:
+          type: string
+          minLength: 1
+          description: 命名空间选择器
+          example: "demo"
+        selector_labels:
+          type: object
+          nullable: true
+          description: 标签选择器
+          example: null
+        match_type:
+          type: string
+          enum: [contains, regex]
+          description: 匹配类型
+          example: "contains"
+        match_pattern:
+          type: string
+          minLength: 1
+          description: 匹配模式
+          example: "ERROR"
+        window_seconds:
+          type: integer
+          minimum: 0
+          description: 时间窗口（秒）
+          default: 0
+          example: 0
+        threshold:
+          type: integer
+          minimum: 1
+          description: 阈值
+          default: 1
+          example: 1
+        group_by:
+          type: array
+          items:
+            type: string
+            enum: [namespace, pod, container]
+          minItems: 1
+          description: 分组维度
+          example: ["namespace", "pod"]
+        cooldown_seconds:
+          type: integer
+          minimum: 0
+          description: 冷却时间（秒）
+          default: 300
+          example: 300
+      required:
+        - name
+        - severity
+        - selector_namespace
+        - match_type
+        - match_pattern
+        - group_by
+    
+    RuleUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: 规则名称
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+          description: 严重级别
+        selector_namespace:
+          type: string
+          minLength: 1
+          description: 命名空间选择器
+        selector_labels:
+          type: object
+          nullable: true
+          description: 标签选择器
+        match_type:
+          type: string
+          enum: [contains, regex]
+          description: 匹配类型
+        match_pattern:
+          type: string
+          minLength: 1
+          description: 匹配模式
+        window_seconds:
+          type: integer
+          minimum: 0
+          description: 时间窗口（秒）
+        threshold:
+          type: integer
+          minimum: 1
+          description: 阈值
+        group_by:
+          type: array
+          items:
+            type: string
+            enum: [namespace, pod, container]
+          minItems: 1
+          description: 分组维度
+        cooldown_seconds:
+          type: integer
+          minimum: 0
+          description: 冷却时间（秒）
+    
+    Error:
+      type: object
+      properties:
+        detail:
+          type: string
+          description: 错误详情
+          example: "规则不存在"
+      required:
+        - detail

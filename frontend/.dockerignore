@@ -1,0 +1,13 @@
+# Docker 容器构建时忽略
+node_modules/
+dist/
+.git/
+.gitignore
+*.md
+.env
+.env.*
+!.env.example
+.eslintcache
+.vscode/
+coverage/
+*.log

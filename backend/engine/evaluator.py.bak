@@ -1,0 +1,283 @@
+"""
+规则评估器
+加载规则、查询日志、执行匹配逻辑
+"""
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update
+
+from backend.models import Rule, Alert
+from backend.engine.loki_client import LokiClient, LogEntry
+from backend.engine.alert_manager import AlertManager
+from backend.engine.window_counter import WindowCounter
+from backend.engine.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+class RuleEvaluator:
+    """规则评估器"""
+    
+    def __init__(self, db: AsyncSession, loki_client: Optional[LokiClient] = None):
+        """
+        初始化评估器
+        
+        Args:
+            db: 数据库会话
+            loki_client: Loki 客户端（可选，用于测试注入）
+        """
+        self.db = db
+        self.loki_client = loki_client or LokiClient()
+        # 窗口计数器字典（key: rule_id, value: WindowCounter）
+        self.window_counters: dict[int, WindowCounter] = {}
+    
+    async def load_enabled_rules(self) -> List[Rule]:
+        """
+        从数据库加载已启用的规则
+        
+        Returns:
+            已启用的规则列表
+        """
+        result = await self.db.execute(
+            select(Rule).where(Rule.enabled == True)
+        )
+        rules = result.scalars().all()
+        
+        logger.debug("Loaded enabled rules", count=len(rules))
+        return list(rules)
+    
+    async def evaluate_rule(self, rule: Rule) -> bool:
+        """
+        评估单条规则
+        
+        Args:
+            rule: 规则对象
+        
+        Returns:
+            是否生成了告警
+        """
+        # 确定查询时间范围
+        end_time = datetime.now(timezone.utc)
+        
+        if rule.last_query_time:
+            start_time = rule.last_query_time
+        else:
+            # 首次查询：查询最近 5 分钟
+            start_time = end_time - timedelta(minutes=5)
+        
+        logger.debug(
+            "Evaluating rule",
+            rule_id=rule.id,
+            rule_name=rule.name,
+            start_time=start_time.isoformat(),
+            end_time=end_time.isoformat()
+        )
+        
+        try:
+            # 查询 Loki
+            entries = await self._query_logs(rule, start_time, end_time)
+            
+            # 执行规则匹配（关键词或窗口阈值）
+            matched_entries = await self._match_rule(rule, entries, end_time)
+            
+            match_count = len(matched_entries)
+            
+            logger.info(
+                "Rule evaluated",
+                rule_id=rule.id,
+                rule_name=rule.name,
+                rule_type="window" if rule.window_seconds > 0 else "keyword",
+                total_logs=len(entries),
+                matched=match_count
+            )
+            
+            # 生成或更新告警
+            alert_generated = False
+            if matched_entries:
+                alert_manager = AlertManager(self.db)
+                alert = await alert_manager.create_or_update_alert(rule, matched_entries)
+                alert_generated = alert is not None
+            
+            # 更新 last_query_time（仅成功时更新）
+            await self._update_last_query_time(rule.id, end_time)
+            
+            return alert_generated
+            
+        except Exception as e:
+            logger.error(
+                "Rule evaluation failed",
+                rule_id=rule.id,
+                rule_name=rule.name,
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            # 失败时不更新 last_query_time，下次重试
+            return False
+    
+    async def _query_logs(
+        self,
+        rule: Rule,
+        start_time: datetime,
+        end_time: datetime
+    ) -> List[LogEntry]:
+        """
+        从 Loki 查询日志
+        
+        Args:
+            rule: 规则对象
+            start_time: 起始时间
+            end_time: 结束时间
+        
+        Returns:
+            日志条目列表
+        """
+        entries = await self.loki_client.query_range(
+            namespace=rule.selector_namespace,
+            start_time=start_time,
+            end_time=end_time,
+            labels=rule.selector_labels,
+            limit=1000
+        )
+        
+        return entries
+    
+    async def _match_rule(
+        self,
+        rule: Rule,
+        entries: List[LogEntry],
+        current_time: datetime
+    ) -> List[LogEntry]:
+        """
+        执行规则匹配
+        
+        Args:
+            rule: 规则对象
+            entries: 日志条目列表
+            current_time: 当前时间
+        
+        Returns:
+            匹配的日志条目列表
+        """
+        # 首先执行关键词匹配
+        keyword_matched = self._match_keyword(rule, entries)
+        
+        # 如果是窗口阈值规则，进一步检查窗口内计数
+        if rule.window_seconds > 0:
+            return await self._match_window_threshold(rule, keyword_matched, current_time)
+        else:
+            # 关键词规则：所有匹配的日志都算
+            return keyword_matched
+    
+    async def _match_window_threshold(
+        self,
+        rule: Rule,
+        matched_entries: List[LogEntry],
+        current_time: datetime
+    ) -> List[LogEntry]:
+        """
+        执行窗口阈值匹配
+        
+        Args:
+            rule: 规则对象
+            matched_entries: 关键词匹配的日志条目
+            current_time: 当前时间
+        
+        Returns:
+            满足阈值条件的日志条目列表
+        """
+        # 获取或创建窗口计数器
+        if rule.id not in self.window_counters:
+            self.window_counters[rule.id] = WindowCounter(rule.window_seconds)
+        
+        counter = self.window_counters[rule.id]
+        
+        # 将所有匹配的日志时间戳添加到计数器
+        for entry in matched_entries:
+            counter.add(entry.timestamp)
+        
+        # 检查窗口内的计数是否达到阈值
+        window_count = counter.count(current_time)
+        
+        if window_count >= rule.threshold:
+            logger.debug(
+                "Window threshold met",
+                rule_id=rule.id,
+                window_count=window_count,
+                threshold=rule.threshold
+            )
+            return matched_entries
+        else:
+            logger.debug(
+                "Window threshold not met",
+                rule_id=rule.id,
+                window_count=window_count,
+                threshold=rule.threshold
+            )
+            return []
+    
+    def _match_keyword(self, rule: Rule, entries: List[LogEntry]) -> List[LogEntry]:
+        """
+        执行关键词匹配
+        
+        Args:
+            rule: 规则对象
+            entries: 日志条目列表
+        
+        Returns:
+            匹配的日志条目列表
+        """
+        if rule.match_type == "contains":
+            return self._match_contains(rule.match_pattern, entries)
+        elif rule.match_type == "regex":
+            # TODO: T009 仅实现 contains，regex 在后续实现
+            logger.warning(
+                "Regex match not implemented yet",
+                rule_id=rule.id,
+                rule_name=rule.name
+            )
+            return []
+        else:
+            logger.error(
+                "Unknown match type",
+                rule_id=rule.id,
+                match_type=rule.match_type
+            )
+            return []
+    
+    def _match_contains(self, pattern: str, entries: List[LogEntry]) -> List[LogEntry]:
+        """
+        关键词包含匹配
+        
+        Args:
+            pattern: 关键词
+            entries: 日志条目列表
+        
+        Returns:
+            匹配的日志条目列表
+        """
+        matched = []
+        
+        for entry in entries:
+            if pattern in entry.content:
+                matched.append(entry)
+        
+        return matched
+    
+    async def _update_last_query_time(self, rule_id: int, query_time: datetime):
+        """
+        更新规则的 last_query_time
+        
+        Args:
+            rule_id: 规则 ID
+            query_time: 查询时间
+        """
+        await self.db.execute(
+            update(Rule)
+            .where(Rule.id == rule_id)
+            .values(
+                last_query_time=query_time,
+                updated_at=datetime.now(timezone.utc)
+            )
+        )
+        await self.db.commit()

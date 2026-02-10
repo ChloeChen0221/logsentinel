@@ -1,0 +1,346 @@
+openapi: 3.0.3
+info:
+  title: LogSentinel Alerts API
+  description: K8s 日志告警平台 - 告警管理 API
+  version: 1.0.0
+  contact:
+    name: LogSentinel Team
+
+servers:
+  - url: http://localhost:8000
+    description: 本地开发环境
+
+tags:
+  - name: alerts
+    description: 告警记录管理
+
+paths:
+  /api/alerts:
+    get:
+      tags:
+        - alerts
+      summary: 查询告警列表
+      description: 获取告警列表，支持分页和筛选
+      parameters:
+        - name: page
+          in: query
+          description: 页码（从 1 开始）
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          description: 每页数量
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: severity
+          in: query
+          description: 筛选严重级别
+          required: false
+          schema:
+            type: string
+            enum: [low, medium, high, critical]
+        - name: rule_id
+          in: query
+          description: 筛选规则 ID
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 成功返回告警列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertListResponse'
+              example:
+                total: 100
+                page: 1
+                page_size: 20
+                items:
+                  - id: 1
+                    rule_id: 1
+                    rule_name: "测试错误告警"
+                    fingerprint: "a1b2c3d4e5f6..."
+                    severity: "high"
+                    status: "active"
+                    first_seen: "2026-02-04T08:30:00Z"
+                    last_seen: "2026-02-04T08:35:15Z"
+                    hit_count: 5
+                    group_by:
+                      namespace: "demo"
+                      pod: "test-pod-123"
+                    last_notified_at: "2026-02-04T08:30:00Z"
+  
+  /api/alerts/{alert_id}:
+    get:
+      tags:
+        - alerts
+      summary: 查询告警详情
+      description: 根据告警 ID 查询告警详细信息，包括样例日志
+      parameters:
+        - name: alert_id
+          in: path
+          description: 告警 ID
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 成功返回告警详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertDetail'
+              example:
+                id: 1
+                rule_id: 1
+                rule_name: "测试错误告警"
+                fingerprint: "a1b2c3d4e5f6..."
+                severity: "high"
+                status: "active"
+                first_seen: "2026-02-04T08:30:00Z"
+                last_seen: "2026-02-04T08:35:15Z"
+                hit_count: 5
+                group_by:
+                  namespace: "demo"
+                  pod: "test-pod-123"
+                sample_log:
+                  timestamp: "2026-02-04T08:35:14.500Z"
+                  content: "ERROR: Connection timeout"
+                  namespace: "demo"
+                  pod: "test-pod-123"
+                  container: "app"
+                last_notified_at: "2026-02-04T08:30:00Z"
+                created_at: "2026-02-04T08:30:00Z"
+                updated_at: "2026-02-04T08:35:15Z"
+        '404':
+          description: 告警不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: "告警不存在"
+
+components:
+  schemas:
+    AlertListResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+          description: 总记录数
+          example: 100
+        page:
+          type: integer
+          description: 当前页码
+          example: 1
+        page_size:
+          type: integer
+          description: 每页数量
+          example: 20
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AlertListItem'
+      required:
+        - total
+        - page
+        - page_size
+        - items
+    
+    AlertListItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: 告警 ID
+          example: 1
+        rule_id:
+          type: integer
+          description: 关联规则 ID
+          example: 1
+        rule_name:
+          type: string
+          description: 规则名称
+          example: "测试错误告警"
+        fingerprint:
+          type: string
+          description: 告警指纹
+          example: "a1b2c3d4e5f6..."
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+          description: 严重级别
+          example: "high"
+        status:
+          type: string
+          enum: [active]
+          description: 状态（MVP 阶段固定为 active，仅作未来扩展预留）
+          example: "active"
+        first_seen:
+          type: string
+          format: date-time
+          description: 首次触发时间
+          example: "2026-02-04T08:30:00Z"
+        last_seen:
+          type: string
+          format: date-time
+          description: 最后触发时间
+          example: "2026-02-04T08:35:15Z"
+        hit_count:
+          type: integer
+          description: 累计命中次数
+          example: 5
+        group_by:
+          type: object
+          description: 分组维度值
+          example:
+            namespace: "demo"
+            pod: "test-pod-123"
+        last_notified_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: 上次通知时间
+          example: "2026-02-04T08:30:00Z"
+      required:
+        - id
+        - rule_id
+        - rule_name
+        - fingerprint
+        - severity
+        - status
+        - first_seen
+        - last_seen
+        - hit_count
+        - group_by
+    
+    AlertDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: 告警 ID
+          example: 1
+        rule_id:
+          type: integer
+          description: 关联规则 ID
+          example: 1
+        rule_name:
+          type: string
+          description: 规则名称
+          example: "测试错误告警"
+        fingerprint:
+          type: string
+          description: 告警指纹
+          example: "a1b2c3d4e5f6..."
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+          description: 严重级别
+          example: "high"
+        status:
+          type: string
+          enum: [active]
+          description: 状态（MVP 阶段固定为 active，仅作未来扩展预留）
+          example: "active"
+        first_seen:
+          type: string
+          format: date-time
+          description: 首次触发时间
+          example: "2026-02-04T08:30:00Z"
+        last_seen:
+          type: string
+          format: date-time
+          description: 最后触发时间
+          example: "2026-02-04T08:35:15Z"
+        hit_count:
+          type: integer
+          description: 累计命中次数
+          example: 5
+        group_by:
+          type: object
+          description: 分组维度值
+          example:
+            namespace: "demo"
+            pod: "test-pod-123"
+        sample_log:
+          $ref: '#/components/schemas/SampleLog'
+        last_notified_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: 上次通知时间
+          example: "2026-02-04T08:30:00Z"
+        created_at:
+          type: string
+          format: date-time
+          description: 创建时间
+          example: "2026-02-04T08:30:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: 更新时间
+          example: "2026-02-04T08:35:15Z"
+      required:
+        - id
+        - rule_id
+        - rule_name
+        - fingerprint
+        - severity
+        - status
+        - first_seen
+        - last_seen
+        - hit_count
+        - group_by
+        - sample_log
+        - created_at
+        - updated_at
+    
+    SampleLog:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: 日志时间戳
+          example: "2026-02-04T08:35:14.500Z"
+        content:
+          type: string
+          description: 日志内容
+          example: "ERROR: Connection timeout"
+        namespace:
+          type: string
+          description: 命名空间
+          example: "demo"
+        pod:
+          type: string
+          description: Pod 名称
+          example: "test-pod-123"
+        container:
+          type: string
+          description: 容器名称
+          example: "app"
+      required:
+        - timestamp
+        - content
+        - namespace
+        - pod
+    
+    Error:
+      type: object
+      properties:
+        detail:
+          type: string
+          description: 错误详情
+          example: "告警不存在"
+      required:
+        - detail

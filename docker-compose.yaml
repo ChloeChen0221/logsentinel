@@ -1,0 +1,76 @@
+services:
+  # 后端 API 服务
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: logsentinel-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=sqlite+aiosqlite:///./data/logsentinel.db
+      - LOKI_URL=http://host.docker.internal:3100
+      - ENGINE_INTERVAL_SECONDS=30
+      - CORS_ORIGINS=["http://localhost:3000","http://localhost:80","http://frontend:80"]
+    volumes:
+      - backend-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - logsentinel-net
+
+  # 规则引擎 Worker
+  engine:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: logsentinel-engine
+    command: ["python", "-m", "engine.worker"]
+    environment:
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=sqlite+aiosqlite:///./data/logsentinel.db
+      - LOKI_URL=http://host.docker.internal:3100
+      - ENGINE_INTERVAL_SECONDS=30
+    volumes:
+      - backend-data:/app/data
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep 'engine.worker' | grep -v grep || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - logsentinel-net
+
+  # 前端服务
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: logsentinel-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - logsentinel-net
+
+networks:
+  logsentinel-net:
+    driver: bridge
+
+volumes:
+  backend-data:

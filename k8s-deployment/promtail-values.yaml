@@ -1,0 +1,182 @@
+# Promtail Helm Chart Values for Minikube
+# Optimized for Kubernetes log collection
+
+# Promtail configuration
+config:
+  # Loki server URL
+  clients:
+    - url: http://loki-gateway.loki.svc.cluster.local/loki/api/v1/push
+      tenant_id: ""
+      # Batching configuration
+      batchwait: 1s
+      batchsize: 102400
+      # Retry configuration
+      backoff_config:
+        min_period: 500ms
+        max_period: 5m
+        max_retries: 10
+      # Timeout configuration
+      timeout: 10s
+  
+  # Server configuration
+  server:
+    http_listen_port: 3101
+    grpc_listen_port: 9095
+    log_level: info
+  
+  # Positions file
+  positions:
+    filename: /run/promtail/positions.yaml
+  
+  # Scrape configurations
+  scrape_configs:
+    # Kubernetes pods
+    - job_name: kubernetes-pods
+      kubernetes_sd_configs:
+        - role: pod
+      
+      # Relabeling rules
+      relabel_configs:
+        # Only scrape pods with logs
+        - source_labels: [__meta_kubernetes_pod_controller_name]
+          regex: ([0-9a-z-.]+?)(-[0-9a-f]{8,10})?
+          target_label: __tmp_controller_name
+        
+        # Service name from controller
+        - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_label_app, __tmp_controller_name, __meta_kubernetes_pod_controller_name]
+          regex: ^;*([^;]+)(;.*)?$
+          target_label: app
+        
+        # Component label
+        - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component, __meta_kubernetes_pod_label_component]
+          regex: ^;*([^;]+)(;.*)?$
+          target_label: component
+        
+        # Add namespace label
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        
+        # Add pod name label
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
+        
+        # Add container name label
+        - source_labels: [__meta_kubernetes_pod_container_name]
+          target_label: container
+        
+        # Add node name label
+        - source_labels: [__meta_kubernetes_pod_node_name]
+          target_label: node
+        
+        # Set log path
+        - replacement: /var/log/pods/*$1/*.log
+          separator: /
+          source_labels:
+            - __meta_kubernetes_pod_uid
+            - __meta_kubernetes_pod_container_name
+          target_label: __path__
+        
+        # Drop logs from Loki namespace (avoid log loop)
+        - action: drop
+          regex: loki
+          source_labels:
+            - __meta_kubernetes_namespace
+      
+      # Pipeline stages
+      pipeline_stages:
+        # Extract container runtime format
+        - cri: {}
+        
+        # Extract log level
+        - regex:
+            expression: '(?P<level>(DEBUG|INFO|WARN|ERROR|FATAL))'
+        
+        # Add labels
+        - labels:
+            level:
+        
+        # Parse timestamp
+        - timestamp:
+            source: timestamp
+            format: RFC3339Nano
+
+# DaemonSet configuration (run on every node)
+daemonset:
+  enabled: true
+
+# Resource limits
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# Tolerations (run on all nodes including master)
+tolerations:
+  - effect: NoSchedule
+    operator: Exists
+  - effect: NoExecute
+    operator: Exists
+
+# Priority class
+priorityClassName: ""
+
+# Service account
+serviceAccount:
+  create: true
+  name: promtail
+
+# RBAC
+rbac:
+  create: true
+  pspEnabled: false
+
+# Volume mounts
+defaultVolumes:
+  - name: run
+    hostPath:
+      path: /run/promtail
+  - name: containers
+    hostPath:
+      path: /var/lib/docker/containers
+  - name: pods
+    hostPath:
+      path: /var/log/pods
+
+defaultVolumeMounts:
+  - name: run
+    mountPath: /run/promtail
+  - name: containers
+    mountPath: /var/lib/docker/containers
+    readOnly: true
+  - name: pods
+    mountPath: /var/log/pods
+    readOnly: true
+
+# Extra environment variables (HOSTNAME is already provided by default)
+extraEnv: []
+
+# Service monitor (disabled)
+serviceMonitor:
+  enabled: false
+
+# Pod annotations
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "3101"
+
+# Update strategy
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+
+# Enable reading from systemd journal (if available)
+extraArgs:
+  - -config.expand-env=true
+
+# Configuration file
+configmap:
+  enabled: true

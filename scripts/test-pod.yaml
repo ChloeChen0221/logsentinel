@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: error-log-generator
+  namespace: demo
+  labels:
+    app: test
+    component: log-generator
+spec:
+  containers:
+  - name: app
+    image: busybox:latest
+    command: ["/bin/sh"]
+    args:
+      - -c
+      - |
+        echo "Starting error log generator..."
+        while true; do
+          timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+          echo "$timestamp ERROR: Connection timeout to database (attempt $((RANDOM % 100)))"
+          echo "$timestamp WARN: Retrying connection..."
+          echo "$timestamp INFO: System check passed"
+          sleep 10
+        done
+    resources:
+      requests:
+        memory: "16Mi"
+        cpu: "10m"
+      limits:
+        memory: "32Mi"
+        cpu: "50m"
+  restartPolicy: Always
