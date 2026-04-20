@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from config import settings
 from database import init_db
 from api import rules, alerts
+from api import sequence_states
 
 
 @asynccontextmanager
@@ -40,6 +41,7 @@ app.add_middleware(
 # 注册路由
 app.include_router(rules.router)
 app.include_router(alerts.router)
+app.include_router(sequence_states.router)
 
 
 @app.get("/health")

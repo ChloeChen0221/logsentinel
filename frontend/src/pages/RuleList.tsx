@@ -84,9 +84,8 @@ const RuleList: React.FC = () => {
   }
 
   const getRuleType = (rule: Rule) => {
-    if (rule.window_seconds > 0) {
-      return '窗口阈值'
-    }
+    if (rule.rule_type === 'sequence') return '序列规则'
+    if (rule.window_seconds > 0) return '窗口阈值'
     return '关键词匹配'
   }
 

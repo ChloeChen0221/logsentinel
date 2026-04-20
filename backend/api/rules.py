@@ -1,18 +1,22 @@
-"""
-规则管理 API
-提供规则 CRUD 和启停功能
-"""
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete
+from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from datetime import datetime
 
 from database import get_db
-from models import Rule
+from models import Rule, RuleStep
 from schemas import RuleCreate, RuleUpdate, RuleResponse
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
+
+
+async def _load_rule_with_steps(db: AsyncSession, rule_id: int) -> Optional[Rule]:
+    result = await db.execute(
+        select(Rule).options(selectinload(Rule.steps)).where(Rule.id == rule_id)
+    )
+    return result.scalar_one_or_none()
 
 
 @router.get("", response_model=List[RuleResponse])
@@ -20,19 +24,12 @@ async def get_rules(
     enabled: Optional[bool] = None,
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    查询规则列表
-    支持按启用状态筛选
-    """
-    query = select(Rule)
-    
+    """查询规则列表（含步骤）"""
+    query = select(Rule).options(selectinload(Rule.steps))
     if enabled is not None:
         query = query.where(Rule.enabled == enabled)
-    
     result = await db.execute(query)
-    rules = result.scalars().all()
-    
-    return rules
+    return result.scalars().all()
 
 
 @router.post("", response_model=RuleResponse, status_code=status.HTTP_201_CREATED)
@@ -53,13 +50,26 @@ async def create_rule(
         threshold=rule_data.threshold,
         group_by=rule_data.group_by,
         cooldown_seconds=rule_data.cooldown_seconds,
+        rule_type=rule_data.rule_type,
+        correlation_type=rule_data.correlation_type,
     )
-    
     db.add(rule)
+    await db.flush()  # 获取 rule.id
+
+    if rule_data.rule_type == "sequence" and rule_data.steps:
+        for step_data in rule_data.steps:
+            step = RuleStep(
+                rule_id=rule.id,
+                step_order=step_data.step_order,
+                match_type=step_data.match_type,
+                match_pattern=step_data.match_pattern,
+                window_seconds=step_data.window_seconds,
+                threshold=step_data.threshold,
+            )
+            db.add(step)
+
     await db.commit()
-    await db.refresh(rule)
-    
-    return rule
+    return await _load_rule_with_steps(db, rule.id)
 
 
 @router.get("/{rule_id}", response_model=RuleResponse)
@@ -67,16 +77,10 @@ async def get_rule(
     rule_id: int,
     db: AsyncSession = Depends(get_db)
 ):
-    """查询规则详情"""
-    result = await db.execute(select(Rule).where(Rule.id == rule_id))
-    rule = result.scalar_one_or_none()
-    
+    """查询规则详情（含步骤）"""
+    rule = await _load_rule_with_steps(db, rule_id)
     if not rule:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="规则不存在"
-        )
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="规则不存在")
     return rule
 
 
@@ -86,27 +90,32 @@ async def update_rule(
     rule_data: RuleUpdate,
     db: AsyncSession = Depends(get_db)
 ):
-    """更新规则"""
-    result = await db.execute(select(Rule).where(Rule.id == rule_id))
-    rule = result.scalar_one_or_none()
-    
+    """更新规则（含步骤替换）"""
+    rule = await _load_rule_with_steps(db, rule_id)
     if not rule:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="规则不存在"
-        )
-    
-    # 更新字段
-    update_data = rule_data.model_dump(exclude_unset=True)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="规则不存在")
+
+    update_data = rule_data.model_dump(exclude_unset=True, exclude={"steps"})
     for field, value in update_data.items():
         setattr(rule, field, value)
-    
     rule.updated_at = datetime.utcnow()
-    
+
+    # 如果提交了 steps，删旧建新
+    if rule_data.steps is not None:
+        await db.execute(delete(RuleStep).where(RuleStep.rule_id == rule_id))
+        for step_data in rule_data.steps:
+            step = RuleStep(
+                rule_id=rule_id,
+                step_order=step_data.step_order,
+                match_type=step_data.match_type,
+                match_pattern=step_data.match_pattern,
+                window_seconds=step_data.window_seconds,
+                threshold=step_data.threshold,
+            )
+            db.add(step)
+
     await db.commit()
-    await db.refresh(rule)
-    
-    return rule
+    return await _load_rule_with_steps(db, rule_id)
 
 
 @router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -114,16 +123,10 @@ async def delete_rule(
     rule_id: int,
     db: AsyncSession = Depends(get_db)
 ):
-    """删除规则（级联删除关联的告警）"""
-    result = await db.execute(select(Rule).where(Rule.id == rule_id))
-    rule = result.scalar_one_or_none()
-    
+    """删除规则（级联删除关联告警、步骤、序列状态）"""
+    rule = await _load_rule_with_steps(db, rule_id)
     if not rule:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="规则不存在"
-        )
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="规则不存在")
     await db.delete(rule)
     await db.commit()
 
@@ -134,22 +137,13 @@ async def enable_rule(
     db: AsyncSession = Depends(get_db)
 ):
     """启用规则"""
-    result = await db.execute(select(Rule).where(Rule.id == rule_id))
-    rule = result.scalar_one_or_none()
-    
+    rule = await _load_rule_with_steps(db, rule_id)
     if not rule:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="规则不存在"
-        )
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="规则不存在")
     rule.enabled = True
     rule.updated_at = datetime.utcnow()
-    
     await db.commit()
-    await db.refresh(rule)
-    
-    return rule
+    return await _load_rule_with_steps(db, rule_id)
 
 
 @router.patch("/{rule_id}/disable", response_model=RuleResponse)
@@ -158,19 +152,10 @@ async def disable_rule(
     db: AsyncSession = Depends(get_db)
 ):
     """停用规则"""
-    result = await db.execute(select(Rule).where(Rule.id == rule_id))
-    rule = result.scalar_one_or_none()
-    
+    rule = await _load_rule_with_steps(db, rule_id)
     if not rule:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="规则不存在"
-        )
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="规则不存在")
     rule.enabled = False
     rule.updated_at = datetime.utcnow()
-    
     await db.commit()
-    await db.refresh(rule)
-    
-    return rule
+    return await _load_rule_with_steps(db, rule_id)

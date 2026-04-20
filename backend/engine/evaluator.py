@@ -1,16 +1,14 @@
-"""
-规则评估器
-加载规则、查询日志、执行匹配逻辑
-"""
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
+from sqlalchemy.orm import selectinload
 
 from models import Rule, Alert
 from engine.loki_client import LokiClient, LogEntry
 from engine.alert_manager import AlertManager
 from engine.window_counter import WindowCounter
+from engine.sequence_state_manager import SequenceStateManager
 from engine.logger import get_logger
 from notifier.console import ConsoleNotifier
 
@@ -19,392 +17,261 @@ logger = get_logger(__name__)
 
 class RuleEvaluator:
     """规则评估器"""
-    
+
     def __init__(self, db: AsyncSession, loki_client: Optional[LokiClient] = None):
-        """
-        初始化评估器
-        
-        Args:
-            db: 数据库会话
-            loki_client: Loki 客户端（可选，用于测试注入）
-        """
         self.db = db
         self.loki_client = loki_client or LokiClient()
-        # 窗口计数器字典（key: rule_id, value: WindowCounter）
         self.window_counters: dict[int, WindowCounter] = {}
-    
+
     async def load_enabled_rules(self) -> List[Rule]:
-        """
-        从数据库加载已启用的规则
-        
-        Returns:
-            已启用的规则列表
-        """
+        """加载已启用的规则（含序列步骤）"""
         result = await self.db.execute(
-            select(Rule).where(Rule.enabled == True)
+            select(Rule)
+            .options(selectinload(Rule.steps))
+            .where(Rule.enabled == True)
         )
         rules = result.scalars().all()
-        
         logger.debug("Loaded enabled rules", count=len(rules))
         return list(rules)
-    
+
     async def evaluate_rule(self, rule: Rule) -> bool:
-        """
-        评估单条规则
-        
-        Args:
-            rule: 规则对象
-        
-        Returns:
-            是否生成了告警
-        """
-        # 确定查询时间范围
-        end_time = datetime.now(timezone.utc)
-        
-        if rule.last_query_time:
-            start_time = rule.last_query_time
-        else:
-            # 首次查询：查询最近 5 分钟
-            start_time = end_time - timedelta(minutes=5)
-        
-        logger.debug(
-            "Evaluating rule",
-            rule_id=rule.id,
-            rule_name=rule.name,
-            start_time=start_time.isoformat(),
-            end_time=end_time.isoformat()
-        )
-        
+        """评估单条规则，按 rule_type 分发"""
         try:
-            # 查询 Loki
-            entries = await self._query_logs(rule, start_time, end_time)
-            
-            # 执行规则匹配（关键词或窗口阈值）
-            matched_entries = await self._match_rule(rule, entries, end_time)
-            
-            match_count = len(matched_entries)
-            
-            logger.info(
-                "Rule evaluated",
-                rule_id=rule.id,
-                rule_name=rule.name,
-                rule_type="window" if rule.window_seconds > 0 else "keyword",
-                total_logs=len(entries),
-                matched=match_count
-            )
-            
-            # 生成或更新告警
-            alert_generated = False
-            if matched_entries:
-                alert_manager = AlertManager(self.db)
-                alert = await alert_manager.create_or_update_alert(rule, matched_entries)
-                alert_generated = alert is not None
-                
-                # 处理通知
-                if alert:
-                    await self._handle_notification(alert, rule, alert_manager)
-            
-            # 更新 last_query_time（仅成功时更新）
-            await self._update_last_query_time(rule.id, end_time)
-            
-            return alert_generated
-            
+            if rule.rule_type == "sequence":
+                return await self._evaluate_sequence(rule)
+            else:
+                return await self._evaluate_single_condition(rule)
         except Exception as e:
             logger.error(
                 "Rule evaluation failed",
                 rule_id=rule.id,
                 rule_name=rule.name,
                 error=str(e),
-                error_type=type(e).__name__
+                error_type=type(e).__name__,
             )
-            # 失败时不更新 last_query_time，下次重试
             return False
-    
-    async def _query_logs(
-        self,
-        rule: Rule,
-        start_time: datetime,
-        end_time: datetime
-    ) -> List[LogEntry]:
-        """
-        从 Loki 查询日志
-        
-        Args:
-            rule: 规则对象
-            start_time: 起始时间
-            end_time: 结束时间
-        
-        Returns:
-            日志条目列表
-        """
-        entries = await self.loki_client.query_range(
+
+    # ------------------------------------------------------------------ #
+    # 单条件评估（原有逻辑，keyword / threshold）
+    # ------------------------------------------------------------------ #
+
+    async def _evaluate_single_condition(self, rule: Rule) -> bool:
+        end_time = datetime.now(timezone.utc)
+        start_time = rule.last_query_time if rule.last_query_time else end_time - timedelta(minutes=5)
+
+        logger.debug(
+            "Evaluating single-condition rule",
+            rule_id=rule.id,
+            rule_name=rule.name,
+        )
+
+        entries = await self._query_logs(rule, start_time, end_time)
+        matched_entries = await self._match_rule(rule, entries, end_time)
+
+        logger.info(
+            "Rule evaluated",
+            rule_id=rule.id,
+            rule_name=rule.name,
+            rule_type="window" if rule.window_seconds > 0 else "keyword",
+            total_logs=len(entries),
+            matched=len(matched_entries),
+        )
+
+        alert_generated = False
+        if matched_entries:
+            alert_manager = AlertManager(self.db)
+            alert = await alert_manager.create_or_update_alert(rule, matched_entries)
+            alert_generated = alert is not None
+            if alert:
+                await self._handle_notification(alert, rule, alert_manager)
+
+        await self._update_last_query_time(rule.id, end_time)
+        return alert_generated
+
+    # ------------------------------------------------------------------ #
+    # 序列评估（新增）
+    # ------------------------------------------------------------------ #
+
+    async def _evaluate_sequence(self, rule: Rule) -> bool:
+        """评估序列规则，维护 SequenceState 状态机"""
+        steps = sorted(rule.steps, key=lambda s: s.step_order)
+        if len(steps) < 2:
+            logger.warning("Sequence rule has fewer than 2 steps, skipping", rule_id=rule.id)
+            return False
+
+        mgr = SequenceStateManager(self.db)
+        state = await mgr.load_or_create(rule.id)
+
+        now = datetime.now(timezone.utc)
+
+        # 1. 超时检查：当前步骤等待超时则重置
+        if state.current_step > 0 and mgr.is_expired(state):
+            logger.debug("Sequence state expired, checking negative correlation", rule_id=rule.id)
+
+            if rule.correlation_type == "negative":
+                # 否定关联：A 命中后超时未出现 B → 触发告警
+                alert_generated = await self._fire_sequence_alert(rule, state, steps)
+            else:
+                alert_generated = False
+
+            await mgr.reset(state)
+            await mgr.save(state)
+            return alert_generated
+
+        # 2. 按 current_step 查询对应步骤
+        current_idx = state.current_step
+        if current_idx >= len(steps):
+            # 状态异常，重置
+            await mgr.reset(state)
+            await mgr.save(state)
+            return False
+
+        step = steps[current_idx]
+        end_time = now
+        start_time = (
+            rule.last_query_time if rule.last_query_time and current_idx == 0
+            else end_time - timedelta(seconds=step.window_seconds)
+        )
+
+        entries = await self._query_logs(rule, start_time, end_time)
+        matched = self._match_step(step, entries)
+
+        logger.info(
+            "Sequence step evaluated",
+            rule_id=rule.id,
+            step=current_idx,
+            total_logs=len(entries),
+            matched=len(matched),
+        )
+
+        alert_generated = False
+
+        if matched:
+            # 步骤命中，推进状态
+            await mgr.advance(state, step, now)
+
+            if state.current_step >= len(steps):
+                # 所有步骤完成
+                if rule.correlation_type == "sequence":
+                    # 顺序关联：全部命中 → 告警
+                    alert_generated = await self._fire_sequence_alert(rule, state, steps)
+                # negative 类型全部命中 → 不告警（B出现了，不需要告警）
+                await mgr.reset(state)
+        # else: 步骤未命中，状态不变，等待下一轮
+
+        await mgr.save(state)
+        await self._update_last_query_time(rule.id, now)
+        return alert_generated
+
+    async def _fire_sequence_alert(self, rule: Rule, state, steps) -> bool:
+        """触发序列告警"""
+        # 使用最后一个已命中步骤的日志作为 sample
+        end_time = datetime.now(timezone.utc)
+        start_time = end_time - timedelta(seconds=60)
+        last_step = steps[min(state.current_step, len(steps)) - 1]
+        entries = await self._query_logs(rule, start_time, end_time)
+        matched = self._match_step(last_step, entries) or entries[:1]
+
+        alert_manager = AlertManager(self.db)
+        alert = await alert_manager.create_or_update_alert(rule, matched)
+        if alert:
+            await self._handle_notification(alert, rule, alert_manager)
+            return True
+        return False
+
+    def _match_step(self, step, entries: List[LogEntry]) -> List[LogEntry]:
+        """匹配单个序列步骤"""
+        if step.match_type == "contains":
+            return [e for e in entries if step.match_pattern in e.content]
+        elif step.match_type == "regex":
+            import re
+            try:
+                pattern = re.compile(step.match_pattern)
+                return [e for e in entries if pattern.search(e.content)]
+            except re.error:
+                return []
+        return []
+
+    # ------------------------------------------------------------------ #
+    # 共用工具函数
+    # ------------------------------------------------------------------ #
+
+    async def _query_logs(self, rule: Rule, start_time: datetime, end_time: datetime) -> List[LogEntry]:
+        return await self.loki_client.query_range(
             namespace=rule.selector_namespace,
             start_time=start_time,
             end_time=end_time,
             labels=rule.selector_labels,
-            limit=1000
+            limit=1000,
         )
-        
-        return entries
-    
-    async def _match_rule(
-        self,
-        rule: Rule,
-        entries: List[LogEntry],
-        current_time: datetime
-    ) -> List[LogEntry]:
-        """
-        执行规则匹配
-        
-        Args:
-            rule: 规则对象
-            entries: 日志条目列表
-            current_time: 当前时间
-        
-        Returns:
-            匹配的日志条目列表
-        """
-        # 首先执行关键词匹配
+
+    async def _match_rule(self, rule: Rule, entries: List[LogEntry], current_time: datetime) -> List[LogEntry]:
         keyword_matched = self._match_keyword(rule, entries)
-        
-        # 如果是窗口阈值规则，进一步检查窗口内计数
         if rule.window_seconds > 0:
             return await self._match_window_threshold(rule, keyword_matched, current_time)
-        else:
-            # 关键词规则：所有匹配的日志都算
-            return keyword_matched
-    
-    async def _match_window_threshold(
-        self,
-        rule: Rule,
-        matched_entries: List[LogEntry],
-        current_time: datetime
-    ) -> List[LogEntry]:
-        """
-        执行窗口阈值匹配
-        
-        Args:
-            rule: 规则对象
-            matched_entries: 关键词匹配的日志条目
-            current_time: 当前时间
-        
-        Returns:
-            满足阈值条件的日志条目列表
-        """
-        # 获取或创建窗口计数器
+        return keyword_matched
+
+    async def _match_window_threshold(self, rule: Rule, matched_entries: List[LogEntry], current_time: datetime) -> List[LogEntry]:
         if rule.id not in self.window_counters:
             self.window_counters[rule.id] = WindowCounter(rule.window_seconds)
-        
         counter = self.window_counters[rule.id]
-        
-        # 将所有匹配的日志时间戳添加到计数器
         for entry in matched_entries:
             counter.add(entry.timestamp)
-        
-        # 检查窗口内的计数是否达到阈值
         window_count = counter.count(current_time)
-        
         if window_count >= rule.threshold:
-            logger.debug(
-                "Window threshold met",
-                rule_id=rule.id,
-                window_count=window_count,
-                threshold=rule.threshold
-            )
+            logger.debug("Window threshold met", rule_id=rule.id, window_count=window_count, threshold=rule.threshold)
             return matched_entries
-        else:
-            logger.debug(
-                "Window threshold not met",
-                rule_id=rule.id,
-                window_count=window_count,
-                threshold=rule.threshold
-            )
-            return []
-    
+        logger.debug("Window threshold not met", rule_id=rule.id, window_count=window_count, threshold=rule.threshold)
+        return []
+
     def _match_keyword(self, rule: Rule, entries: List[LogEntry]) -> List[LogEntry]:
-        """
-        执行关键词匹配
-        
-        Args:
-            rule: 规则对象
-            entries: 日志条目列表
-        
-        Returns:
-            匹配的日志条目列表
-        """
         if rule.match_type == "contains":
             return self._match_contains(rule.match_pattern, entries)
         elif rule.match_type == "regex":
-            # TODO: T009 仅实现 contains，regex 在后续实现
-            logger.warning(
-                "Regex match not implemented yet",
-                rule_id=rule.id,
-                rule_name=rule.name
-            )
+            logger.warning("Regex match not implemented yet", rule_id=rule.id, rule_name=rule.name)
             return []
-        else:
-            logger.error(
-                "Unknown match type",
-                rule_id=rule.id,
-                match_type=rule.match_type
-            )
-            return []
-    
+        logger.error("Unknown match type", rule_id=rule.id, match_type=rule.match_type)
+        return []
+
     def _match_contains(self, pattern: str, entries: List[LogEntry]) -> List[LogEntry]:
-        """
-        关键词包含匹配
-        
-        Args:
-            pattern: 关键词
-            entries: 日志条目列表
-        
-        Returns:
-            匹配的日志条目列表
-        """
-        matched = []
-        
-        for entry in entries:
-            if pattern in entry.content:
-                matched.append(entry)
-        
-        return matched
-    
+        return [e for e in entries if pattern in e.content]
+
     async def _update_last_query_time(self, rule_id: int, query_time: datetime):
-        """
-        更新规则的 last_query_time
-        
-        Args:
-            rule_id: 规则 ID
-            query_time: 查询时间
-        """
         await self.db.execute(
             update(Rule)
             .where(Rule.id == rule_id)
-            .values(
-                last_query_time=query_time,
-                updated_at=datetime.now(timezone.utc)
-            )
+            .values(last_query_time=query_time, updated_at=datetime.now(timezone.utc))
         )
         await self.db.commit()
-    
-    async def _handle_notification(
-        self,
-        alert: Alert,
-        rule: Rule,
-        alert_manager: AlertManager
-    ):
-        """
-        处理告警通知（含冷却期检查）
-        
-        Args:
-            alert: 告警对象
-            rule: 规则对象
-            alert_manager: 告警管理器实例
-        """
-        # 检查是否需要发送通知（冷却期检查）
+
+    async def _handle_notification(self, alert: Alert, rule: Rule, alert_manager: AlertManager):
         if not self.should_notify(alert, rule):
-            logger.info(
-                "Notification skipped (cooldown active)",
-                alert_id=alert.id,
-                rule_id=rule.id,
-                rule_name=rule.name,
-                hit_count=alert.hit_count
-            )
+            logger.info("Notification skipped (cooldown active)", alert_id=alert.id, rule_id=rule.id)
             return
-        
-        # 发送通知
         notifier = ConsoleNotifier()
         try:
             result = await notifier.send(alert, rule.name)
-            
+            import json
             if result["success"]:
-                # 记录通知历史
-                import json
                 await alert_manager.record_notification(
-                    alert=alert,
-                    channel="console",
-                    content=json.dumps(result["content"], ensure_ascii=False),
-                    success=True
+                    alert=alert, channel="console",
+                    content=json.dumps(result["content"], ensure_ascii=False), success=True,
                 )
-                
-                logger.info(
-                    "Notification sent successfully",
-                    alert_id=alert.id,
-                    rule_id=rule.id,
-                    rule_name=rule.name,
-                    channel="console"
-                )
+                logger.info("Notification sent successfully", alert_id=alert.id, rule_id=rule.id)
             else:
-                # 记录失败的通知
                 await alert_manager.record_notification(
-                    alert=alert,
-                    channel="console",
-                    content="",
-                    success=False,
-                    error_message=result.get("error", "Unknown error")
+                    alert=alert, channel="console", content="", success=False,
+                    error_message=result.get("error", "Unknown error"),
                 )
-                
-                logger.error(
-                    "Notification failed",
-                    alert_id=alert.id,
-                    rule_id=rule.id,
-                    error=result.get("error")
-                )
-        
+                logger.error("Notification failed", alert_id=alert.id, error=result.get("error"))
         except Exception as e:
-            logger.error(
-                "Notification error",
-                alert_id=alert.id,
-                rule_id=rule.id,
-                error=str(e),
-                error_type=type(e).__name__
-            )
-    
+            logger.error("Notification error", alert_id=alert.id, error=str(e))
+
     def should_notify(self, alert: Alert, rule: Rule) -> bool:
-        """
-        判断是否应该发送通知（冷却期检查）
-        
-        Args:
-            alert: 告警对象
-            rule: 规则对象
-        
-        Returns:
-            是否应该发送通知
-        """
-        # 首次触发（未发送过通知）
         if alert.last_notified_at is None:
-            logger.debug(
-                "First notification",
-                alert_id=alert.id,
-                rule_id=rule.id
-            )
             return True
-        
-        # 检查冷却期
         now = datetime.now(timezone.utc)
-        
-        # 确保 last_notified_at 有时区信息
         last_notified = alert.last_notified_at
         if last_notified.tzinfo is None:
             last_notified = last_notified.replace(tzinfo=timezone.utc)
-        
-        time_since_last_notification = (now - last_notified).total_seconds()
-        
-        if time_since_last_notification >= rule.cooldown_seconds:
-            logger.debug(
-                "Cooldown period ended",
-                alert_id=alert.id,
-                rule_id=rule.id,
-                time_since_last=time_since_last_notification,
-                cooldown_seconds=rule.cooldown_seconds
-            )
-            return True
-        else:
-            logger.debug(
-                "In cooldown period",
-                alert_id=alert.id,
-                rule_id=rule.id,
-                time_since_last=time_since_last_notification,
-                cooldown_seconds=rule.cooldown_seconds
-            )
-            return False
+        return (now - last_notified).total_seconds() >= rule.cooldown_seconds

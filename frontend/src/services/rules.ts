@@ -1,5 +1,13 @@
 import api from './api'
 
+export interface RuleStep {
+  step_order: number
+  match_type: 'contains' | 'regex'
+  match_pattern: string
+  window_seconds: number
+  threshold: number
+}
+
 export interface Rule {
   id: number
   name: string
@@ -13,6 +21,9 @@ export interface Rule {
   threshold: number
   group_by: string[]
   cooldown_seconds: number
+  rule_type: 'keyword' | 'threshold' | 'sequence'
+  correlation_type?: 'sequence' | 'negative' | null
+  steps: RuleStep[]
   last_query_time?: string | null
   created_at: string
   updated_at: string
@@ -30,41 +41,38 @@ export interface RuleCreate {
   threshold?: number
   group_by: string[]
   cooldown_seconds?: number
+  rule_type?: 'keyword' | 'threshold' | 'sequence'
+  correlation_type?: 'sequence' | 'negative' | null
+  steps?: RuleStep[]
 }
 
 export const rulesService = {
-  // 获取规则列表
   async list(params?: { enabled?: boolean }): Promise<Rule[]> {
     return api.get('/rules', { params })
   },
 
-  // 获取规则详情
   async get(id: number): Promise<Rule> {
     return api.get(`/rules/${id}`)
   },
 
-  // 创建规则
   async create(data: RuleCreate): Promise<Rule> {
     return api.post('/rules', data)
   },
 
-  // 更新规则
   async update(id: number, data: Partial<RuleCreate>): Promise<Rule> {
     return api.put(`/rules/${id}`, data)
   },
 
-  // 删除规则
   async delete(id: number): Promise<void> {
     return api.delete(`/rules/${id}`)
   },
 
-  // 启用规则
   async enable(id: number): Promise<Rule> {
     return api.patch(`/rules/${id}/enable`)
   },
 
-  // 停用规则
   async disable(id: number): Promise<Rule> {
     return api.patch(`/rules/${id}/disable`)
   },
 }
+

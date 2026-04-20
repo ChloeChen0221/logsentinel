@@ -27,9 +27,15 @@ class Rule(Base):
     last_query_time = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # rule_type: keyword / threshold / sequence（默认 keyword，向后兼容）
+    rule_type = Column(String(20), nullable=False, default="keyword")
+    # correlation_type: sequence（顺序关联）/ negative（否定关联），仅 rule_type=sequence 时有效
+    correlation_type = Column(String(20), nullable=True)
     
     # 关系
     alerts = relationship("Alert", back_populates="rule", cascade="all, delete-orphan")
+    steps = relationship("RuleStep", back_populates="rule", cascade="all, delete-orphan", order_by="RuleStep.step_order")
+    sequence_state = relationship("SequenceState", back_populates="rule", cascade="all, delete-orphan", uselist=False)
     
     # 索引
     __table_args__ = (

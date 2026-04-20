@@ -41,7 +41,8 @@ async def init_db() -> None:
     创建所有表
     """
     from database.base import Base
+    # 确保所有模型已导入，使其注册到 Base.metadata
+    import models  # noqa: F401
     
     async with engine.begin() as conn:
-        # 创建所有表
         await conn.run_sync(Base.metadata.create_all)
