@@ -1,8 +1,7 @@
 ---
-name: "OPSX: Apply"
-description: Implement tasks from an OpenSpec change (Experimental)
-category: Workflow
-tags: [workflow, artifacts, experimental]
+name: OPSX: Apply
+description: "Implement tasks from an OpenSpec change (Experimental)"
+argument-hint: "[command arguments]"
 ---
 
 Implement tasks from an OpenSpec change.

@@ -1,0 +1,63 @@
+schema: spec-driven
+
+context: |
+  项目：LogSentinel —— 基于 Loki 的 Kubernetes 日志告警平台
+
+  技术栈：
+  - 后端：Python 3.9 / FastAPI / SQLAlchemy (async) / APScheduler / asyncio
+  - 前端：React 19 / TypeScript / Ant Design 6 / Vite
+  - 存储：PostgreSQL（主存储）+ Redis（分布式锁、缓存、窗口计数器、pub/sub）
+  - 日志采集：Loki + Promtail（single-binary 模式，filesystem 存储）
+  - 对象存储：MinIO（可选）
+  - 部署：Docker Compose（开发）/ Kubernetes + Helm（生产）
+  - 迁移工具：Alembic
+
+  架构原则：
+  - 状态外置：进程内状态（窗口计数器、冷却状态）迁移到 Redis，Worker 保持无状态
+  - 水平扩展：Rule Worker 通过一致性哈希分片 + Redis 分布式锁支持多副本
+  - 路径异步：所有 I/O 路径使用 asyncio（aiohttp 查询 Loki，asyncpg 访问 PG，asyncio.Queue 解耦通知）
+  - 固定副本：K8s 采用固定副本数部署（不使用 HPA），便于压测对比
+  - 单节点依赖：Redis 单节点、PostgreSQL 单实例（毕设场景足够）
+
+  目录约定：
+  - backend/api/           REST API 路由（FastAPI routers）
+  - backend/models/        SQLAlchemy ORM 模型
+  - backend/schemas/       Pydantic 请求/响应 Schema
+  - backend/engine/        规则引擎（evaluator、loki_client、alert_manager、sequence_state_manager、worker）
+  - backend/notifier/      通知模块
+  - backend/database/      数据库连接与会话管理
+  - frontend/src/pages/    页面组件
+  - frontend/src/services/ API 调用服务
+
+  编码规范：
+  - Python：遵循 PEP 8，使用 async/await，日志用 structlog
+  - TypeScript：strict mode，组件用函数式 + hooks
+  - 提交信息：中文描述 + 英文技术名词（如 "feat: 接入 Redis 分布式锁"）
+
+  文档语言：
+  - Markdown 文档、proposal、design、tasks 使用中文编写
+  - 代码注释可中英文混合
+
+rules:
+  proposal:
+    - 必须包含「背景与动机」「目标」「非目标」「影响范围」四个章节
+    - 明确说明对现有模块的影响（哪些文件需要改动）
+    - 列出风险与回滚策略
+
+  specs:
+    - 使用 Given/When/Then 格式描述验收场景
+    - 每个 capability 必须有可验证的 acceptance criteria
+    - API 变更需给出请求/响应示例
+
+  design:
+    - 涉及数据库变更必须附 schema 变更说明（新增/修改字段、索引、迁移脚本）
+    - 涉及 Redis 使用必须列出 key 设计（命名、数据结构、TTL）
+    - 涉及 Worker/分布式逻辑必须画流程图或时序图描述并发/故障场景
+    - 关键决策需给出「选型对比」（至少 2 个方案 + 选择理由）
+
+  tasks:
+    - 任务粒度控制在 2 小时以内，按「后端 → 前端 → 部署 → 验证」顺序组织
+    - 每个任务用 `- [ ]` 开头便于勾选进度
+    - 涉及数据库变更的任务必须包含「编写 alembic 迁移」子任务
+    - 涉及新依赖的任务必须包含「更新 requirements.txt / package.json」子任务
+    - 最后必须有「压测验证」或「功能验证」任务，说明验证方式
