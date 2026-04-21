@@ -1,5 +1,8 @@
-## MODIFIED Requirements
+# rule-crud-api Specification
 
+## Purpose
+TBD - created by archiving change sequence-rule-engine. Update Purpose after archive.
+## Requirements
 ### Requirement: Rule CRUD 支持序列规则字段
 POST/PUT `/api/rules` SHALL 接受并返回 `rule_type`、`correlation_type`、`steps`（RuleStep 列表）字段，所有新字段 SHALL 为 Optional 以保持向后兼容。GET `/api/rules/{id}` SHALL 在 rule_type=sequence 时返回关联的 steps 数组。
 
@@ -15,8 +18,6 @@ POST/PUT `/api/rules` SHALL 接受并返回 `rule_type`、`correlation_type`、`
 - **WHEN** GET /api/rules/{id}，规则为 keyword 类型
 - **THEN** 响应 JSON 中 steps 为空数组，rule_type 为 keyword
 
-## ADDED Requirements
-
 ### Requirement: SequenceState 查询端点
 系统 SHALL 提供 GET `/api/sequence-states?rule_id={id}` 端点，返回指定规则的当前序列状态（current_step、expires_at、step_timestamps），供调试使用。
 
@@ -27,3 +28,4 @@ POST/PUT `/api/rules` SHALL 接受并返回 `rule_type`、`correlation_type`、`
 #### Scenario: 查询不存在的序列状态
 - **WHEN** GET /api/sequence-states?rule_id=999
 - **THEN** 返回空列表
+
