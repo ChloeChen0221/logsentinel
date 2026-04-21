@@ -10,8 +10,6 @@ import json
 
 # 获取 backend 目录的绝对路径
 BACKEND_DIR = Path(__file__).parent
-DATA_DIR = BACKEND_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
 
 
 class Settings(BaseSettings):
@@ -22,8 +20,15 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
     
-    # 数据库配置
-    DATABASE_URL: str = f"sqlite+aiosqlite:///{DATA_DIR / 'logsentinel.db'}"
+    # 数据库配置（PostgreSQL via asyncpg）
+    DATABASE_URL: str = "postgresql+asyncpg://logsentinel:logsentinel@localhost:5432/logsentinel"
+    DB_POOL_SIZE: int = 20
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_RECYCLE: int = 3600
+
+    # Redis 配置
+    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_POOL_MAX_CONN: int = 50
     
     # Loki 配置
     LOKI_URL: str = "http://localhost:3100"

@@ -1,0 +1,74 @@
+{{- if .Values.engine.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "logsentinel.fullname" . }}-engine
+  labels:
+    {{- include "logsentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: engine
+spec:
+  replicas: {{ .Values.engine.replicas }}
+  selector:
+    matchLabels:
+      {{- include "logsentinel.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: engine
+  template:
+    metadata:
+      labels:
+        {{- include "logsentinel.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: engine
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if gt (int .Values.engine.replicas) 1 }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "logsentinel.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: engine
+                topologyKey: kubernetes.io/hostname
+      {{- end }}
+      containers:
+        - name: engine
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy | default .Values.global.imagePullPolicy }}
+          command: ["python", "-m", "engine.worker"]
+          env:
+            {{- include "logsentinel.commonEnv" . | nindent 12 }}
+            # WORKER_ID：通过 downward API 注入 pod name（P2 分片依据）
+            - name: WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ENGINE_CONCURRENCY
+              value: {{ .Values.engine.concurrency | quote }}
+            {{- range $k, $v := .Values.engine.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.engine.resources | nindent 12 }}
+          livenessProbe:
+            exec:
+              # 用 python + redis 检查本 worker 的心跳 Key 是否还活着
+              # （比进程存活检查更语义化：进程挂了就会被 asyncio 退出 → K8s 自动拉起）
+              command:
+                - "python"
+                - "-c"
+                - |
+                  import os, sys
+                  from redis import Redis
+                  r = Redis.from_url(os.environ["REDIS_URL"])
+                  wid = os.environ.get("WORKER_ID") or os.environ.get("HOSTNAME", "")
+                  sys.exit(0 if r.exists(f"worker:{wid}") else 1)
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+{{- end }}

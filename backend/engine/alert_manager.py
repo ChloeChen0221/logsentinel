@@ -12,8 +12,32 @@ from sqlalchemy import select
 from models import Rule, Alert, Notification
 from engine.loki_client import LogEntry
 from engine.logger import get_logger
+from database.redis import get_redis_client
 
 logger = get_logger(__name__)
+
+
+ALERTS_CHANNEL = "alerts:new"
+
+
+async def _publish_alert(alert: Alert) -> None:
+    """事务提交后 PUBLISH 到 Redis pub/sub（供 API 副本的 WebSocket 订阅）"""
+    try:
+        redis = get_redis_client()
+        payload = json.dumps({
+            "id": alert.id,
+            "rule_id": alert.rule_id,
+            "fingerprint": alert.fingerprint,
+            "severity": alert.severity,
+            "status": alert.status,
+            "hit_count": alert.hit_count,
+            "last_seen": alert.last_seen.isoformat() if alert.last_seen else None,
+            "group_by": alert.group_by or {},
+        }, ensure_ascii=False)
+        await redis.publish(ALERTS_CHANNEL, payload)
+    except Exception as e:
+        # 失败不影响告警落库，前端重连时可通过 REST 补齐
+        logger.warning("alert_publish_failed", alert_id=alert.id, error=str(e))
 
 
 class AlertManager:
@@ -136,7 +160,10 @@ class AlertManager:
                 fingerprint=fingerprint,
                 hit_count=existing_alert.hit_count
             )
-            
+
+            # P3：事务提交后 PUBLISH 通知 WebSocket 订阅者
+            await _publish_alert(existing_alert)
+
             return existing_alert
         else:
             # 创建新告警
@@ -165,7 +192,10 @@ class AlertManager:
                 severity=rule.severity,
                 hit_count=alert.hit_count
             )
-            
+
+            # P3：事务提交后 PUBLISH 通知 WebSocket 订阅者
+            await _publish_alert(alert)
+
             return alert
     
     async def record_notification(
@@ -192,13 +222,15 @@ class AlertManager:
         now = datetime.now(timezone.utc)
         
         # 创建通知记录
+        # 注：当前仍是同步直发模式（沿用 MVP 行为），故跳过 pending 直接落终态。
+        # P3 改造（asyncio.Queue + 补偿扫表）后，入队时将先写 pending、消费者再 CAS 更新到 sent/failed。
         notification = Notification(
             alert_id=alert.id,
             notified_at=now,
             channel=channel,
             content=content,
-            status="success" if success else "failed",
-            error_message=error_message
+            status="sent" if success else "failed",
+            error_message=error_message,
         )
         
         self.db.add(notification)

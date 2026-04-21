@@ -1,0 +1,32 @@
+LogSentinel {{ .Chart.AppVersion }} 已部署到 namespace {{ .Release.Namespace }}。
+
+========== 访问地址（NodePort）==========
+{{- $nodeIP := "<NODE_IP>" }}
+API:      http://{{ $nodeIP }}:{{ .Values.api.service.nodePort }}/docs
+{{- if .Values.frontend.enabled }}
+前端:     http://{{ $nodeIP }}:{{ .Values.frontend.service.nodePort }}/
+WebSocket: ws://{{ $nodeIP }}:{{ .Values.frontend.service.nodePort }}/ws/alerts
+{{- end }}
+
+查看实际 Node IP：
+  kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'
+
+========== 常用命令 ==========
+查看所有 pod：
+  kubectl -n {{ .Release.Namespace }} get pods -o wide
+
+查看 API 日志：
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/component=api --tail=50 -f
+
+查看 engine 日志（按副本）：
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/component=engine --tail=50 -f
+
+升级：
+  helm upgrade {{ .Release.Name }} helm-charts/logsentinel -n {{ .Release.Namespace }}
+
+卸载：
+  helm uninstall {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+========== 健康检查 ==========
+API: curl http://<NODE_IP>:{{ .Values.api.service.nodePort }}/health
+Redis 心跳: kubectl -n {{ .Release.Namespace }} exec {{ include "logsentinel.fullname" . }}-redis-master-0 -- redis-cli KEYS 'worker:*'

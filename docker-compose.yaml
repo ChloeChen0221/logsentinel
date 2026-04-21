@@ -1,4 +1,41 @@
 services:
+  # PostgreSQL
+  postgres:
+    image: postgres:16-alpine
+    container_name: logsentinel-postgres
+    environment:
+      POSTGRES_USER: logsentinel
+      POSTGRES_PASSWORD: logsentinel
+      POSTGRES_DB: logsentinel
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U logsentinel -d logsentinel"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - logsentinel-net
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: logsentinel-redis
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - logsentinel-net
+
   # 后端 API 服务
   backend:
     build:
@@ -9,12 +46,18 @@ services:
       - "8000:8000"
     environment:
       - LOG_LEVEL=INFO
-      - DATABASE_URL=sqlite+aiosqlite:///./data/logsentinel.db
+      - DATABASE_URL=postgresql+asyncpg://logsentinel:logsentinel@postgres:5432/logsentinel
+      - REDIS_URL=redis://redis:6379/0
       - LOKI_URL=http://host.docker.internal:3100
       - ENGINE_INTERVAL_SECONDS=30
       - CORS_ORIGINS=["http://localhost:3000","http://localhost:80","http://frontend:80"]
-    volumes:
-      - backend-data:/app/data
+    # 启动顺序：先跑 alembic 迁移，再用 gunicorn 启动多进程 uvicorn workers（生产对齐）
+    command: ["sh", "-c", "alembic upgrade head && gunicorn main:app -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:8000 --timeout 60"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -32,11 +75,10 @@ services:
     command: ["python", "-m", "engine.worker"]
     environment:
       - LOG_LEVEL=INFO
-      - DATABASE_URL=sqlite+aiosqlite:///./data/logsentinel.db
+      - DATABASE_URL=postgresql+asyncpg://logsentinel:logsentinel@postgres:5432/logsentinel
+      - REDIS_URL=redis://redis:6379/0
       - LOKI_URL=http://host.docker.internal:3102
       - ENGINE_INTERVAL_SECONDS=30
-    volumes:
-      - backend-data:/app/data
     depends_on:
       backend:
         condition: service_healthy
@@ -73,4 +115,5 @@ networks:
     driver: bridge
 
 volumes:
-  backend-data:
+  postgres-data:
+  redis-data:

@@ -1,0 +1,157 @@
+# LogSentinel Helm Umbrella Chart — 默认 values
+# 本文件作为"可用默认"，毕设答辩环境用 values-dev.yaml 进一步缩减资源
+
+# ========== 全局 ==========
+global:
+  # 镜像拉取策略：Never 用于 K3s 本地 import 镜像；Always 用于推送到仓库的镜像
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+# ========== LogSentinel 应用 ==========
+image:
+  # 腾讯软件源镜像仓库（公开可拉取）
+  repository: mirrors.tencent.com/chloeyhchen/logsentinel-backend
+  tag: "0.5.0"
+  pullPolicy: IfNotPresent
+
+api:
+  enabled: true
+  replicas: 2               # P3: 双副本
+  workers: 4                # gunicorn -w，P3 改为 4
+  service:
+    type: NodePort
+    port: 8000
+    nodePort: 30880
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  env: {}                   # 额外环境变量
+
+engine:
+  enabled: true
+  replicas: 3               # P2: 三副本分片
+  concurrency: 10           # asyncio.Semaphore 并发上限（P2 使用）
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  env: {}
+
+frontend:
+  enabled: true
+  replicas: 1
+  image:
+    repository: mirrors.tencent.com/chloeyhchen/logsentinel-frontend
+    tag: "0.5.0.2"
+    pullPolicy: IfNotPresent
+  service:
+    type: NodePort
+    port: 80
+    nodePort: 30881
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+
+# ========== PostgreSQL subchart ==========
+postgresql:
+  enabled: true
+  image:
+    # Bitnami 2025 起将历史镜像迁移到 bitnamilegacy 仓库
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
+  auth:
+    username: logsentinel
+    password: logsentinel   # MVP 阶段直写；生产改用 existingSecret
+    database: logsentinel
+  primary:
+    persistence:
+      enabled: false        # MVP 阶段不持久化，重启丢库
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+# ========== Redis subchart ==========
+redis:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/redis
+  auth:
+    enabled: false          # 内部网络，MVP 阶段不鉴权
+  architecture: standalone  # 单副本
+  master:
+    persistence:
+      enabled: false
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "200m"
+        memory: "256Mi"
+  replica:
+    replicaCount: 0         # 纯 standalone 不启从副本
+
+# ========== Loki subchart ==========
+loki:
+  enabled: true
+  deploymentMode: SingleBinary
+  loki:
+    auth_enabled: false
+    commonConfig:
+      replication_factor: 1
+    storage:
+      type: filesystem
+    schemaConfig:
+      configs:
+        - from: "2024-01-01"
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: loki_index_
+            period: 24h
+  singleBinary:
+    replicas: 1
+    persistence:
+      # 不持久化但需要可写卷给 Loki 内部状态（ruler、wal、boltdb-shipper 缓存）
+      enabled: true
+      size: 2Gi
+      storageClass: ""
+  # 关闭微服务组件（single-binary 模式不需要）
+  read:
+    replicas: 0
+  write:
+    replicas: 0
+  backend:
+    replicas: 0
+  chunksCache:
+    enabled: false
+  resultsCache:
+    enabled: false
+  gateway:
+    enabled: false
+  monitoring:
+    selfMonitoring:
+      enabled: false
+      grafanaAgent:
+        installOperator: false
+  test:
+    enabled: false
+  lokiCanary:
+    enabled: false

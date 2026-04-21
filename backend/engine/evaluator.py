@@ -1,16 +1,19 @@
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional
+from typing import Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
+from redis.asyncio import Redis
+
 from models import Rule, Alert
 from engine.loki_client import LokiClient, LogEntry
 from engine.alert_manager import AlertManager
-from engine.window_counter import WindowCounter
+from engine.window_counter import RedisWindowCounter
+from engine.fingerprint import compute_fingerprint
 from engine.sequence_state_manager import SequenceStateManager
 from engine.logger import get_logger
-from notifier.console import ConsoleNotifier
+from notifier.queue import enqueue_notification
 
 logger = get_logger(__name__)
 
@@ -18,10 +21,15 @@ logger = get_logger(__name__)
 class RuleEvaluator:
     """规则评估器"""
 
-    def __init__(self, db: AsyncSession, loki_client: Optional[LokiClient] = None):
+    def __init__(
+        self,
+        db: AsyncSession,
+        redis: Redis,
+        loki_client: Optional[LokiClient] = None,
+    ):
         self.db = db
+        self.redis = redis
         self.loki_client = loki_client or LokiClient()
-        self.window_counters: dict[int, WindowCounter] = {}
 
     async def load_enabled_rules(self) -> List[Rule]:
         """加载已启用的规则（含序列步骤）"""
@@ -203,6 +211,7 @@ class RuleEvaluator:
             end_time=end_time,
             labels=rule.selector_labels,
             limit=1000,
+            rule_id=rule.id,
         )
 
     async def _match_rule(self, rule: Rule, entries: List[LogEntry], current_time: datetime) -> List[LogEntry]:
@@ -211,18 +220,88 @@ class RuleEvaluator:
             return await self._match_window_threshold(rule, keyword_matched, current_time)
         return keyword_matched
 
-    async def _match_window_threshold(self, rule: Rule, matched_entries: List[LogEntry], current_time: datetime) -> List[LogEntry]:
-        if rule.id not in self.window_counters:
-            self.window_counters[rule.id] = WindowCounter(rule.window_seconds)
-        counter = self.window_counters[rule.id]
+    async def _match_window_threshold(
+        self,
+        rule: Rule,
+        matched_entries: List[LogEntry],
+        current_time: datetime,
+    ) -> List[LogEntry]:
+        """按 group_by 分组独立维护 Redis 窗口计数器，独立判定阈值
+
+        - group_by 为空：所有事件归入单一默认分组 (fingerprint based on {})
+        - 任一分组达标：返回该分组的事件列表（用于 AlertManager 创建/更新告警实例）
+        - 多分组同时达标：返回所有达标分组的合并事件
+        """
+        group_keys: List[str] = list(rule.group_by) if rule.group_by else []
+
+        # 1. 按分组拆分事件
+        groups: Dict[str, List[LogEntry]] = {}
+        group_values_map: Dict[str, Dict[str, str]] = {}
         for entry in matched_entries:
-            counter.add(entry.timestamp)
-        window_count = counter.count(current_time)
-        if window_count >= rule.threshold:
-            logger.debug("Window threshold met", rule_id=rule.id, window_count=window_count, threshold=rule.threshold)
-            return matched_entries
-        logger.debug("Window threshold not met", rule_id=rule.id, window_count=window_count, threshold=rule.threshold)
-        return []
+            values = self._extract_group_values(entry, group_keys)
+            fp = compute_fingerprint(rule.id, values)
+            groups.setdefault(fp, []).append(entry)
+            group_values_map.setdefault(fp, values)
+
+        # 2. 若 keyword 阶段未匹配到任何事件，仍需为"默认分组"读取一次计数（窗口内可能有历史事件）
+        if not groups and not group_keys:
+            fp = compute_fingerprint(rule.id, {})
+            groups[fp] = []
+            group_values_map[fp] = {}
+
+        # 3. 每组独立 add + count
+        triggered_entries: List[LogEntry] = []
+        for fp, entries in groups.items():
+            counter = RedisWindowCounter(
+                redis=self.redis,
+                rule_id=rule.id,
+                fingerprint=fp,
+                window_seconds=rule.window_seconds,
+            )
+            await counter.add([e.timestamp for e in entries])
+            window_count = await counter.count(current_time)
+
+            if window_count >= rule.threshold:
+                logger.debug(
+                    "Window threshold met",
+                    rule_id=rule.id,
+                    fingerprint=fp,
+                    group_values=group_values_map[fp],
+                    window_count=window_count,
+                    threshold=rule.threshold,
+                )
+                triggered_entries.extend(entries)
+            else:
+                logger.debug(
+                    "Window threshold not met",
+                    rule_id=rule.id,
+                    fingerprint=fp,
+                    group_values=group_values_map[fp],
+                    window_count=window_count,
+                    threshold=rule.threshold,
+                )
+
+        return triggered_entries
+
+    @staticmethod
+    def _extract_group_values(entry: LogEntry, group_keys: List[str]) -> Dict[str, str]:
+        """从 LogEntry 提取 group_by 字段的值
+
+        当前 LogEntry 仅暴露 namespace / pod / container 三个标签，其他 key 取空串。
+        """
+        if not group_keys:
+            return {}
+        result: Dict[str, str] = {}
+        for k in group_keys:
+            if k == "namespace":
+                result[k] = entry.namespace or ""
+            elif k == "pod":
+                result[k] = entry.pod or ""
+            elif k == "container":
+                result[k] = entry.container or ""
+            else:
+                result[k] = ""
+        return result
 
     def _match_keyword(self, rule: Rule, entries: List[LogEntry]) -> List[LogEntry]:
         if rule.match_type == "contains":
@@ -245,27 +324,22 @@ class RuleEvaluator:
         await self.db.commit()
 
     async def _handle_notification(self, alert: Alert, rule: Rule, alert_manager: AlertManager):
+        """入队通知（至少一次语义）：仅写 pending 记录 + 推入 asyncio.Queue；
+        实际发送由 notifier_worker 完成，崩溃补偿由 recovery 保证
+        """
         if not self.should_notify(alert, rule):
             logger.info("Notification skipped (cooldown active)", alert_id=alert.id, rule_id=rule.id)
             return
-        notifier = ConsoleNotifier()
         try:
-            result = await notifier.send(alert, rule.name)
-            import json
-            if result["success"]:
-                await alert_manager.record_notification(
-                    alert=alert, channel="console",
-                    content=json.dumps(result["content"], ensure_ascii=False), success=True,
-                )
-                logger.info("Notification sent successfully", alert_id=alert.id, rule_id=rule.id)
-            else:
-                await alert_manager.record_notification(
-                    alert=alert, channel="console", content="", success=False,
-                    error_message=result.get("error", "Unknown error"),
-                )
-                logger.error("Notification failed", alert_id=alert.id, error=result.get("error"))
+            nid = await enqueue_notification(
+                db=self.db,
+                alert_id=alert.id,
+                rule_name=rule.name,
+                channel="console",
+            )
+            logger.info("Notification enqueued", notification_id=nid, alert_id=alert.id, rule_id=rule.id)
         except Exception as e:
-            logger.error("Notification error", alert_id=alert.id, error=str(e))
+            logger.error("Enqueue notification failed", alert_id=alert.id, error=str(e))
 
     def should_notify(self, alert: Alert, rule: Rule) -> bool:
         if alert.last_notified_at is None:

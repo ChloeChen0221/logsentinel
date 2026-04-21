@@ -1,0 +1,29 @@
+apiVersion: v2
+name: logsentinel
+description: LogSentinel —— 基于 Loki 的 Kubernetes 日志告警平台（Umbrella Chart）
+type: application
+version: 0.5.0
+appVersion: "0.5.0"
+keywords:
+  - logging
+  - alerting
+  - observability
+  - loki
+  - kubernetes
+home: https://github.com/ChloeChen0221/logsentinel
+maintainers:
+  - name: LogSentinel Team
+
+dependencies:
+  - name: postgresql
+    version: "~13.4.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: "~19.6.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+  - name: loki
+    version: "~6.6.0"
+    repository: https://grafana.github.io/helm-charts
+    condition: loki.enabled

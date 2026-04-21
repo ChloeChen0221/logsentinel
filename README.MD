@@ -2,7 +2,33 @@
 
 基于 Loki 的 Kubernetes 日志告警系统，支持灵活的规则配置和实时告警。
 
-## 快速启动
+## 部署方式
+
+推荐用 Helm Umbrella Chart 一键部署到 K8s（含 PG / Redis / Loki）：
+
+```bash
+# 毕设答辩 / 本地 K3s
+helm install logsentinel helm-charts/logsentinel \
+  -f helm-charts/logsentinel/values-dev.yaml \
+  -n logsentinel --create-namespace
+
+# 生产环境
+helm install logsentinel helm-charts/logsentinel \
+  -f helm-charts/logsentinel/values-prod.yaml \
+  -n logsentinel --create-namespace
+
+# 查看访问地址
+kubectl -n logsentinel get svc logsentinel-api logsentinel-frontend
+```
+
+访问地址（NodePort 默认）：
+- 前端：`http://<NodeIP>:30881/`
+- API docs：`http://<NodeIP>:30880/docs`
+- WebSocket：`ws://<NodeIP>:30881/ws/alerts`
+
+开发环境可用 `docker-compose up` 启动单副本 PG + Redis + Engine + API + 前端（不追求分布式验证）。
+
+## 快速启动（本地开发）
 
 ### 前置条件
 

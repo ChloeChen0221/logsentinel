@@ -1,16 +1,22 @@
 # FastAPI 核心
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
+gunicorn>=21,<23
 pydantic==2.5.3
 pydantic-settings==2.1.0
 
 # 数据库
 sqlalchemy[asyncio]==2.0.25
-aiosqlite==0.19.0
+asyncpg>=0.29,<0.30
+alembic>=1.13,<2
+
+# Redis
+redis>=4.2,<6
 
 # HTTP 客户端
 httpx==0.26.0
-requests==2.31.0  # 用于 Loki 查询（替代 httpx，解决 502 问题）
+aiohttp>=3.9,<4
+aiolimiter>=1.1,<2
 
 # 调度器
 apscheduler==3.10.4
@@ -21,3 +27,4 @@ structlog==24.1.0
 # 测试
 pytest==7.4.4
 pytest-asyncio==0.23.3
+fakeredis>=2.20,<3

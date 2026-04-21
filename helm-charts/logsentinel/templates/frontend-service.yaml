@@ -1,0 +1,22 @@
+{{- if .Values.frontend.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "logsentinel.fullname" . }}-frontend
+  labels:
+    {{- include "logsentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  type: {{ .Values.frontend.service.type | default "NodePort" }}
+  ports:
+    - name: http
+      port: {{ .Values.frontend.service.port | default 80 }}
+      targetPort: http
+      protocol: TCP
+      {{- if eq (.Values.frontend.service.type | default "NodePort") "NodePort" }}
+      nodePort: {{ .Values.frontend.service.nodePort }}
+      {{- end }}
+  selector:
+    {{- include "logsentinel.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+{{- end }}

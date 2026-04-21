@@ -91,6 +91,12 @@ const RuleList: React.FC = () => {
 
   const columns: ColumnsType<Rule> = [
     {
+      title: 'ID',
+      dataIndex: 'id',
+      key: 'id',
+      width: 80,
+    },
+    {
       title: '规则名称',
       dataIndex: 'name',
       key: 'name',

@@ -1,24 +1,29 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Table,
   Tag,
   Card,
   message,
+  Badge,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { alertsService, type Alert } from '../services/alerts'
+import { AlertsWebSocket, buildAlertsWsUrl, type AlertWsPayload } from '../services/websocket'
 import dayjs from 'dayjs'
 
 const AlertList: React.FC = () => {
   const navigate = useNavigate()
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [loading, setLoading] = useState(false)
+  const [wsConnected, setWsConnected] = useState(false)
   const [pagination, setPagination] = useState({
     current: 1,
     pageSize: 20,
     total: 0,
   })
+  const currentPageRef = useRef(pagination.current)
+  const currentPageSizeRef = useRef(pagination.pageSize)
 
   const loadAlerts = async (page = 1, pageSize = 20) => {
     setLoading(true)
@@ -33,6 +38,8 @@ const AlertList: React.FC = () => {
         pageSize: response.page_size,
         total: response.total,
       })
+      currentPageRef.current = response.page
+      currentPageSizeRef.current = response.page_size
     } catch (error) {
       message.error('加载告警列表失败')
       console.error(error)
@@ -43,6 +50,45 @@ const AlertList: React.FC = () => {
 
   useEffect(() => {
     loadAlerts()
+
+    // 建立 WebSocket 订阅；重连时主动调 REST 补齐
+    const client = new AlertsWebSocket(buildAlertsWsUrl(), {
+      onOpen: () => setWsConnected(true),
+      onClose: () => setWsConnected(false),
+      onMessage: (payload: AlertWsPayload) => {
+        setAlerts((prev) => {
+          const idx = prev.findIndex((a) => a.id === payload.id)
+          if (idx >= 0) {
+            // 更新已有行（last_seen / hit_count / status）
+            const updated = [...prev]
+            updated[idx] = {
+              ...updated[idx],
+              hit_count: payload.hit_count,
+              last_seen: payload.last_seen || updated[idx].last_seen,
+              status: payload.status || updated[idx].status,
+            }
+            return updated
+          }
+          // 新告警：仅当在第 1 页时 prepend（其他页刷新后可见）
+          if (currentPageRef.current === 1) {
+            // 从后端 REST 获取完整字段（ws payload 字段较少）
+            alertsService
+              .list({ page: 1, page_size: currentPageSizeRef.current })
+              .then((resp) => setAlerts(resp.items))
+              .catch(() => {})
+          }
+          return prev
+        })
+      },
+      onReconnect: () => {
+        setWsConnected(true)
+        // 断线重连后主动补齐
+        loadAlerts(currentPageRef.current, currentPageSizeRef.current)
+      },
+      onError: () => setWsConnected(false),
+    })
+    client.connect()
+    return () => client.close()
   }, [])
 
   const getSeverityColor = (severity: string) => {
@@ -138,7 +184,17 @@ const AlertList: React.FC = () => {
   ]
 
   return (
-    <Card title="告警列表">
+    <Card
+      title={
+        <span>
+          告警列表{' '}
+          <Badge
+            status={wsConnected ? 'success' : 'default'}
+            text={wsConnected ? '实时推送已连接' : '实时推送未连接'}
+          />
+        </span>
+      }
+    >
       <Table
         columns={columns}
         dataSource={alerts}
