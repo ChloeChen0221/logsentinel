@@ -39,65 +39,12 @@ node --version  # 应显示 18+
 
 ## 一、部署 Loki Stack
 
-### 1.1 自动部署（推荐）
-
-使用提供的部署脚本快速部署 Loki 和 Promtail：
+> **已迁移**：Loki 现已作为 `helm-charts/logsentinel` Umbrella Chart 的 subchart 随平台一起部署，不再需要独立部署到 `loki` namespace。详见仓库根目录 README。
 
 ```bash
-cd scripts
-./setup-loki.sh
-```
-
-脚本执行内容：
-- 创建 `loki` 命名空间
-- 添加 Grafana Helm 仓库
-- 部署 Loki（SingleBinary 模式 + MinIO）
-- 部署 Promtail（日志采集）
-- 验证部署状态
-
-等待 2-3 分钟，直到所有 Pod 运行正常。
-
-### 1.2 手动部署（可选）
-
-如果自动脚本失败，可手动执行：
-
-```bash
-# 添加 Grafana Helm 仓库
-helm repo add grafana https://grafana.github.io/helm-charts
-helm repo update
-
-# 创建命名空间
-kubectl create namespace loki
-
-# 部署 Loki
-helm upgrade --install loki grafana/loki \
-  -n loki \
--f k8s-deployment/loki-values.yaml \
-  --wait --timeout 10m
-
-# 部署 Promtail
-helm upgrade --install promtail grafana/promtail \
-  -n loki \
--f k8s-deployment/promtail-values.yaml \
-  --wait --timeout 5m
-
-# 验证部署
-kubectl get pods -n loki
-```
-
-### 1.3 启动 Loki 端口转发
-
-在新的终端窗口中运行（保持运行）：
-
-```bash
-# 直接连接 loki 服务（绕过 gateway）
-kubectl port-forward -n loki svc/loki 3102:3100
-```
-
-验证 Loki 可访问：
-
-```bash
-curl http://localhost:3102/loki/api/v1/labels
+helm install logsentinel helm-charts/logsentinel \
+  -f helm-charts/logsentinel/values-dev.yaml \
+  -n logsentinel --create-namespace
 ```
 
 ## 二、克隆项目并初始化
@@ -141,7 +88,7 @@ ENGINE_INTERVAL_SECONDS=30
 LOG_LEVEL=INFO
 ```
 
-> **注意**：使用 3102 端口直接连接 loki 服务，而不是通过 gateway（3100），这是为了避免 httpx 客户端的兼容性问题。详见 `k8s-deployment/TROUBLESHOOTING.md`。
+> **注意**：MVP 期用 3102 端口直连 loki 服务是为规避 httpx 502 兼容问题；P3 改用 aiohttp 后已解除该限制。
 
 ### 2.3 初始化数据库
 
@@ -589,12 +536,9 @@ chmod +x scripts/*.sh
 
 ## 关键文件清单
 
-- `scripts/setup-loki.sh` - Loki 自动部署脚本
 - `scripts/verify-pipeline.sh` - 端到端验证脚本
 - `scripts/test-pod.yaml` - 测试 Pod 配置
-- `k8s-deployment/loki-values.yaml` - Loki Helm 完整配置
-- `k8s-deployment/promtail-values.yaml` - Promtail Helm 完整配置
-- `k8s-deployment/README.md` - 部署配置说明
+- `helm-charts/logsentinel/` - Umbrella Chart（Loki/Promtail 已作为 subchart 内置）
 
 ---
 
