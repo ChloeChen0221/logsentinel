@@ -91,7 +91,7 @@ LOKI_URL
 {{- end -}}
 
 {{/*
-应用容器通用环境变量（DATABASE_URL / REDIS_URL / LOKI_URL）
+应用容器通用环境变量（DATABASE_URL / REDIS_URL / LOKI_URL + Redis 密码）
 */}}
 {{- define "logsentinel.commonEnv" -}}
 - name: DATABASE_URL
@@ -104,4 +104,11 @@ LOKI_URL
   value: "INFO"
 - name: ENGINE_INTERVAL_SECONDS
   value: "30"
+{{- if and .Values.redis.auth.enabled .Values.redis.auth.existingSecret }}
+- name: REDIS_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.redis.auth.existingSecret }}
+      key: {{ .Values.redis.auth.existingSecretPasswordKey | default "redis-password" }}
+{{- end }}
 {{- end -}}

@@ -56,15 +56,23 @@ spec:
             {{- toYaml .Values.engine.resources | nindent 12 }}
           livenessProbe:
             exec:
-              # 用 python + redis 检查本 worker 的心跳 Key 是否还活着
-              # （比进程存活检查更语义化：进程挂了就会被 asyncio 退出 → K8s 自动拉起）
+              # 检查本 worker 心跳 Key 是否存在（支持 REDIS_PASSWORD）
               command:
                 - "python"
                 - "-c"
                 - |
                   import os, sys
+                  from urllib.parse import urlparse, urlunparse, quote
                   from redis import Redis
-                  r = Redis.from_url(os.environ["REDIS_URL"])
+                  url = os.environ["REDIS_URL"]
+                  pw = os.environ.get("REDIS_PASSWORD", "")
+                  if pw:
+                      p = urlparse(url)
+                      if not p.password:
+                          host = p.hostname or "localhost"
+                          nl = f"{host}:{p.port}" if p.port else host
+                          url = urlunparse(p._replace(netloc=f":{quote(pw, safe='')}@{nl}"))
+                  r = Redis.from_url(url)
                   wid = os.environ.get("WORKER_ID") or os.environ.get("HOSTNAME", "")
                   sys.exit(0 if r.exists(f"worker:{wid}") else 1)
             initialDelaySeconds: 30

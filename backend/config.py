@@ -28,6 +28,7 @@ class Settings(BaseSettings):
 
     # Redis 配置
     REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_PASSWORD: str = ""  # 若非空，运行时注入到 REDIS_URL userinfo 部分（Secret 提供）
     REDIS_POOL_MAX_CONN: int = 50
     
     # Loki 配置

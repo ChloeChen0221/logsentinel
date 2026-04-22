@@ -11,7 +11,7 @@ global:
 image:
   # 腾讯软件源镜像仓库（公开可拉取）
   repository: mirrors.tencent.com/chloeyhchen/logsentinel-backend
-  tag: "0.5.0"
+  tag: "0.5.1"
   pullPolicy: IfNotPresent
 
 api:
@@ -92,7 +92,9 @@ redis:
     registry: docker.io
     repository: bitnamilegacy/redis
   auth:
-    enabled: false          # 内部网络，MVP 阶段不鉴权
+    enabled: true             # 合规要求：开启密码认证
+    existingSecret: logsentinel-redis-auth
+    existingSecretPasswordKey: redis-password
   architecture: standalone  # 单副本
   master:
     persistence:
