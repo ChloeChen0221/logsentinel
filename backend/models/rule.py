@@ -36,6 +36,8 @@ class Rule(Base):
     rule_type = Column(String(20), nullable=False, default="keyword")
     # correlation_type: sequence（顺序关联）/ negative（否定关联），仅 rule_type=sequence 时有效
     correlation_type = Column(String(20), nullable=True)
+    # notify_config: 通知渠道列表 [{"type":"wecom","name":"xx","webhook_url":"...","mentioned_mobile_list":[]}]
+    notify_config = Column(JSONB, nullable=False, default=list, server_default='[]')
     
     # 关系
     alerts = relationship("Alert", back_populates="rule", cascade="all, delete-orphan")

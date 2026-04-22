@@ -3,6 +3,7 @@
 使用 structlog 输出结构化日志
 """
 from typing import Dict, Any
+
 import structlog
 
 from notifier.base import BaseNotifier
@@ -14,20 +15,14 @@ logger = structlog.get_logger(__name__)
 
 class ConsoleNotifier(BaseNotifier):
     """控制台通知器"""
-    
-    async def send(self, alert: Alert, rule_name: str) -> Dict[str, Any]:
-        """
-        发送告警通知到控制台
-        
-        Args:
-            alert: 告警对象
-            rule_name: 规则名称
-        
-        Returns:
-            通知结果字典
-        """
+
+    async def send(
+        self,
+        alert: Alert,
+        rule_name: str,
+        channel_config: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
         try:
-            # 构造通知内容
             notification_content = {
                 "rule_name": rule_name,
                 "rule_id": alert.rule_id,
@@ -39,31 +34,20 @@ class ConsoleNotifier(BaseNotifier):
                 "group_by": alert.group_by,
                 "sample_log": alert.sample_log,
             }
-            
-            # 输出结构化日志
-            logger.info(
-                "alert_notification",
-                channel="console",
-                alert_id=alert.id,
-                **notification_content
-            )
-            
+            logger.info("alert_notification", channel="console", alert_id=alert.id, **notification_content)
             return {
                 "success": True,
-                "channel": "console",
-                "content": notification_content
+                "retriable": False,
+                "content": notification_content,
+                "error": None,
+                "errcode": 0,
             }
-        
         except Exception as e:
-            logger.error(
-                "notification_failed",
-                channel="console",
-                alert_id=alert.id,
-                error=str(e)
-            )
-            
+            logger.error("notification_failed", channel="console", alert_id=alert.id, error=str(e))
             return {
                 "success": False,
-                "channel": "console",
-                "error": str(e)
+                "retriable": True,
+                "content": {},
+                "error": str(e),
+                "errcode": -1,
             }

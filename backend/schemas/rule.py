@@ -4,6 +4,54 @@ from datetime import datetime
 import re
 
 
+# 允许的通知渠道类型（当前仅支持 wecom + console）
+_ALLOWED_CHANNEL_TYPES = {"wecom", "console"}
+_WECOM_WEBHOOK_PREFIX = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send"
+# 中国大陆手机号：11 位，1 开头，第二位 3-9
+_PHONE_REGEX = re.compile(r"^1[3-9]\d{9}$")
+
+
+class NotifyChannelConfig(BaseModel):
+    """通知渠道配置（嵌入在 rule.notify_config 数组中的单元）"""
+    type: str = Field(..., description="渠道类型：wecom / console")
+    name: str = Field(..., min_length=1, max_length=50, description="渠道显示名")
+    webhook_url: Optional[str] = Field(None, description="wecom 类型必填")
+    mentioned_mobile_list: Optional[List[str]] = Field(
+        default_factory=list, description="wecom 可选，@手机号列表；`@all` 表示所有人"
+    )
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, v: str) -> str:
+        if v not in _ALLOWED_CHANNEL_TYPES:
+            raise ValueError(f"channel type 必须是 {sorted(_ALLOWED_CHANNEL_TYPES)} 之一")
+        return v
+
+    @field_validator("mentioned_mobile_list")
+    @classmethod
+    def validate_mobiles(cls, v: Optional[List[str]]) -> List[str]:
+        v = v or []
+        for m in v:
+            if m == "@all":
+                continue
+            if not _PHONE_REGEX.match(m):
+                raise ValueError(f"非法手机号格式: {m}")
+        return v
+
+    @model_validator(mode="after")
+    def validate_wecom_fields(self) -> "NotifyChannelConfig":
+        if self.type == "wecom":
+            if not self.webhook_url:
+                raise ValueError("wecom 渠道必须提供 webhook_url")
+            if not self.webhook_url.startswith(_WECOM_WEBHOOK_PREFIX):
+                raise ValueError(f"wecom webhook_url 必须以 {_WECOM_WEBHOOK_PREFIX} 开头")
+            if "key=" not in self.webhook_url:
+                raise ValueError("wecom webhook_url 必须包含 key 参数")
+        return self
+
+    model_config = {"from_attributes": True}
+
+
 class RuleStepSchema(BaseModel):
     """规则步骤 Schema"""
     step_order: int = Field(..., ge=0, description="步骤序号（从 0 开始）")
@@ -37,6 +85,10 @@ class RuleBase(BaseModel):
     cooldown_seconds: int = Field(300, ge=0, description="冷却时间（秒）")
     rule_type: str = Field("keyword", description="规则类型: keyword / threshold / sequence")
     correlation_type: Optional[str] = Field(None, description="关联类型: sequence / negative（仅序列规则有效）")
+    notify_config: List[NotifyChannelConfig] = Field(
+        default_factory=list,
+        description="通知渠道列表；为空则 fallback 到 console",
+    )
     
     @field_validator("severity")
     @classmethod
@@ -131,6 +183,7 @@ class RuleUpdate(BaseModel):
     rule_type: Optional[str] = None
     correlation_type: Optional[str] = None
     steps: Optional[List[RuleStepSchema]] = None
+    notify_config: Optional[List[NotifyChannelConfig]] = None
     
     @field_validator("severity")
     @classmethod

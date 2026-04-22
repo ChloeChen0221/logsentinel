@@ -52,6 +52,7 @@ async def create_rule(
         cooldown_seconds=rule_data.cooldown_seconds,
         rule_type=rule_data.rule_type,
         correlation_type=rule_data.correlation_type,
+        notify_config=[c.model_dump() for c in rule_data.notify_config],
     )
     db.add(rule)
     await db.flush()  # 获取 rule.id
@@ -96,6 +97,10 @@ async def update_rule(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="规则不存在")
 
     update_data = rule_data.model_dump(exclude_unset=True, exclude={"steps"})
+    # notify_config 需要 JSONB 友好的 list[dict]
+    if "notify_config" in update_data and update_data["notify_config"] is not None:
+        # model_dump 已递归展开 NotifyChannelConfig，此处无需再处理
+        pass
     for field, value in update_data.items():
         setattr(rule, field, value)
     rule.updated_at = datetime.utcnow()

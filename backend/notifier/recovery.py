@@ -61,6 +61,8 @@ async def recover_pending_notifications() -> int:
                     notification_id=n.id,
                     alert_id=n.alert_id,
                     rule_name=alert_rule.get(n.alert_id, "unknown"),
+                    channel_type=n.channel or "console",
+                    channel_config=n.channel_config or {},
                 )
             )
             enqueued += 1

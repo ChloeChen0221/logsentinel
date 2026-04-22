@@ -13,8 +13,9 @@ import {
   Divider,
   Alert,
 } from 'antd'
-import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
-import { rulesService, type RuleCreate, type RuleStep } from '../services/rules'
+import { PlusOutlined, DeleteOutlined, SendOutlined } from '@ant-design/icons'
+import { rulesService, type RuleCreate, type RuleStep, type NotifyChannel } from '../services/rules'
+import { channelsService } from '../services/channels'
 
 const { Option } = Select
 
@@ -35,6 +36,8 @@ const RuleForm: React.FC = () => {
     { step_order: 0, match_type: 'contains', match_pattern: '', window_seconds: 60, threshold: 1 },
     { step_order: 1, match_type: 'contains', match_pattern: '', window_seconds: 60, threshold: 1 },
   ])
+  const [channels, setChannels] = useState<NotifyChannel[]>([])
+  const [testingIndex, setTestingIndex] = useState<number | null>(null)
   const isEdit = !!id
 
   useEffect(() => {
@@ -54,6 +57,7 @@ const RuleForm: React.FC = () => {
       if (rule.steps && rule.steps.length > 0) {
         setSteps(rule.steps)
       }
+      setChannels(rule.notify_config || [])
     } catch (error) {
       message.error('加载规则失败')
     } finally {
@@ -83,6 +87,7 @@ const RuleForm: React.FC = () => {
       steps: ruleType === 'sequence'
         ? steps.map((s, i) => ({ ...s, step_order: i }))
         : undefined,
+      notify_config: channels,
     }
 
     setSubmitting(true)
@@ -117,6 +122,50 @@ const RuleForm: React.FC = () => {
 
   const updateStep = (index: number, field: keyof RuleStep, value: any) => {
     setSteps(prev => prev.map((s, i) => i === index ? { ...s, [field]: value } : s))
+  }
+
+  const addChannel = () => {
+    setChannels(prev => [
+      ...prev,
+      { type: 'wecom', name: '', webhook_url: '', mentioned_mobile_list: [] },
+    ])
+  }
+
+  const removeChannel = (index: number) => {
+    setChannels(prev => prev.filter((_, i) => i !== index))
+  }
+
+  const updateChannel = (index: number, patch: Partial<NotifyChannel>) => {
+    setChannels(prev => prev.map((c, i) => i === index ? { ...c, ...patch } : c))
+  }
+
+  const testChannel = async (index: number) => {
+    const ch = channels[index]
+    if (!ch.webhook_url) {
+      message.error('请先填写 webhook_url')
+      return
+    }
+    setTestingIndex(index)
+    try {
+      const res = await channelsService.testWecom({
+        webhook_url: ch.webhook_url,
+        mentioned_mobile_list: ch.mentioned_mobile_list || [],
+      })
+      if (res.success) {
+        message.success('测试消息已发送，请检查企微群')
+      } else {
+        message.error(`发送失败 errcode=${res.errcode} ${res.errmsg}`)
+      }
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail
+      if (detail && typeof detail === 'object') {
+        message.error(`发送失败 errcode=${detail.errcode} ${detail.errmsg}`)
+      } else {
+        message.error('测试发送失败')
+      }
+    } finally {
+      setTestingIndex(null)
+    }
   }
 
   return (
@@ -310,6 +359,89 @@ const RuleForm: React.FC = () => {
           rules={[{ required: true }]}>
           <InputNumber min={0} style={{ width: '100%' }} />
         </Form.Item>
+
+        <Divider>通知渠道</Divider>
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="未配置渠道时，告警仅输出到服务端日志（console）。企业微信群机器人每分钟限额 20 条。"
+        />
+        {channels.map((ch, index) => (
+          <Card
+            key={index}
+            size="small"
+            title={`渠道 ${index + 1}`}
+            style={{ marginBottom: 12 }}
+            extra={
+              <Button
+                type="text"
+                danger
+                icon={<DeleteOutlined />}
+                onClick={() => removeChannel(index)}
+              >
+                删除
+              </Button>
+            }
+          >
+            <Space direction="vertical" style={{ width: '100%' }}>
+              <Space wrap>
+                <Form.Item label="类型" style={{ marginBottom: 0 }}>
+                  <Select
+                    value={ch.type}
+                    onChange={(v) => updateChannel(index, { type: v })}
+                    style={{ width: 160 }}
+                  >
+                    <Option value="wecom">企业微信</Option>
+                  </Select>
+                </Form.Item>
+                <Form.Item label="渠道名称" style={{ marginBottom: 0 }}>
+                  <Input
+                    value={ch.name}
+                    onChange={(e) => updateChannel(index, { name: e.target.value })}
+                    placeholder="例如：开发群"
+                    style={{ width: 200 }}
+                  />
+                </Form.Item>
+              </Space>
+              <Form.Item label="Webhook URL" style={{ marginBottom: 0 }}>
+                <Input
+                  value={ch.webhook_url || ''}
+                  onChange={(e) => updateChannel(index, { webhook_url: e.target.value })}
+                  placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx"
+                />
+              </Form.Item>
+              <Form.Item
+                label="@手机号（可选）"
+                style={{ marginBottom: 0 }}
+                tooltip="回车添加；@all 表示所有人"
+              >
+                <Select
+                  mode="tags"
+                  value={ch.mentioned_mobile_list || []}
+                  onChange={(v) => updateChannel(index, { mentioned_mobile_list: v })}
+                  placeholder="13800000000 或 @all"
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+              <Button
+                icon={<SendOutlined />}
+                loading={testingIndex === index}
+                onClick={() => testChannel(index)}
+              >
+                测试发送
+              </Button>
+            </Space>
+          </Card>
+        ))}
+        <Button
+          type="dashed"
+          icon={<PlusOutlined />}
+          onClick={addChannel}
+          style={{ marginBottom: 16, width: '100%' }}
+        >
+          添加通知渠道
+        </Button>
 
         <Form.Item label="启用状态" name="enabled" valuePropName="checked">
           <Switch checkedChildren="启用" unCheckedChildren="停用" />

@@ -12,6 +12,7 @@ from api import rules, alerts
 from api import sequence_states
 from api import notifications
 from api import ws
+from api import channels
 
 logger = structlog.get_logger(__name__)
 
@@ -59,6 +60,7 @@ app.include_router(alerts.router)
 app.include_router(sequence_states.router)
 app.include_router(notifications.router)
 app.include_router(ws.router)
+app.include_router(channels.router)
 
 
 @app.get("/health")

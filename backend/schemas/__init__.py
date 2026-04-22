@@ -5,6 +5,7 @@ from schemas.rule import (
     RuleUpdate,
     RuleResponse,
     SequenceStateResponse,
+    NotifyChannelConfig,
 )
 from schemas.alert import (
     AlertResponse,
@@ -17,5 +18,6 @@ __all__ = [
     "RuleUpdate",
     "RuleResponse",
     "SequenceStateResponse",
+    "NotifyChannelConfig",
     "AlertResponse",
 ]

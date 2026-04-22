@@ -8,6 +8,13 @@ export interface RuleStep {
   threshold: number
 }
 
+export interface NotifyChannel {
+  type: 'wecom' | 'console'
+  name: string
+  webhook_url?: string
+  mentioned_mobile_list?: string[]
+}
+
 export interface Rule {
   id: number
   name: string
@@ -24,6 +31,7 @@ export interface Rule {
   rule_type: 'keyword' | 'threshold' | 'sequence'
   correlation_type?: 'sequence' | 'negative' | null
   steps: RuleStep[]
+  notify_config: NotifyChannel[]
   last_query_time?: string | null
   created_at: string
   updated_at: string
@@ -44,6 +52,7 @@ export interface RuleCreate {
   rule_type?: 'keyword' | 'threshold' | 'sequence'
   correlation_type?: 'sequence' | 'negative' | null
   steps?: RuleStep[]
+  notify_config?: NotifyChannel[]
 }
 
 export const rulesService = {

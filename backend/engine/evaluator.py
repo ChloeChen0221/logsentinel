@@ -339,13 +339,20 @@ class RuleEvaluator:
             logger.info("Notification skipped (cooldown active)", alert_id=alert.id, rule_id=rule.id)
             return
         try:
-            nid = await enqueue_notification(
+            channels = list(rule.notify_config or [])
+            nids = await enqueue_notification(
                 db=self.db,
                 alert_id=alert.id,
                 rule_name=rule.name,
-                channel="console",
+                channels=channels,
             )
-            logger.info("Notification enqueued", notification_id=nid, alert_id=alert.id, rule_id=rule.id)
+            logger.info(
+                "Notification enqueued",
+                notification_ids=nids,
+                alert_id=alert.id,
+                rule_id=rule.id,
+                channel_count=len(nids),
+            )
         except Exception as e:
             logger.error("Enqueue notification failed", alert_id=alert.id, error=str(e))
 
