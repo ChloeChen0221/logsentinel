@@ -175,7 +175,7 @@ const RuleForm: React.FC = () => {
               rules={[{ required: true, message: '请选择匹配类型' }]}>
               <Select>
                 <Option value="contains">关键词包含</Option>
-                <Option value="regex">正则表达式（暂不支持）</Option>
+                <Option value="regex">正则表达式</Option>
               </Select>
             </Form.Item>
 

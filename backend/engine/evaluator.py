@@ -307,13 +307,21 @@ class RuleEvaluator:
         if rule.match_type == "contains":
             return self._match_contains(rule.match_pattern, entries)
         elif rule.match_type == "regex":
-            logger.warning("Regex match not implemented yet", rule_id=rule.id, rule_name=rule.name)
-            return []
+            return self._match_regex(rule.match_pattern, entries, rule_id=rule.id)
         logger.error("Unknown match type", rule_id=rule.id, match_type=rule.match_type)
         return []
 
     def _match_contains(self, pattern: str, entries: List[LogEntry]) -> List[LogEntry]:
         return [e for e in entries if pattern in e.content]
+
+    def _match_regex(self, pattern: str, entries: List[LogEntry], rule_id: int | None = None) -> List[LogEntry]:
+        import re
+        try:
+            compiled = re.compile(pattern)
+        except re.error as e:
+            logger.error("Invalid regex pattern", rule_id=rule_id, pattern=pattern, error=str(e))
+            return []
+        return [e for e in entries if compiled.search(e.content)]
 
     async def _update_last_query_time(self, rule_id: int, query_time: datetime):
         await self.db.execute(
