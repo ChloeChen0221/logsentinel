@@ -1,0 +1,7 @@
+system,qps,eval_interval,run_id,exp_id,p50_ms,p95_ms,p99_ms,avg_ms,max_ms,firing_time_source,notes
+LogSentinel,20,30,1,exp-grafana-compare-01,13953,13953,13953,13953,13953,prometheus_rules_api,
+Grafana,20,30,1,exp-grafana-compare-01,29953,29953,29953,29953,29953,prometheus_rules_api,
+LogSentinel,20,30,2,exp-grafana-compare-02,6156,6156,6156,6156,6156,prometheus_rules_api,
+Grafana,20,30,2,exp-grafana-compare-02,22156,22156,22156,22156,22156,prometheus_rules_api,
+LogSentinel,20,30,3,exp-grafana-compare-03,,,,,,prometheus_rules_api,
+Grafana,20,30,3,exp-grafana-compare-03,14469,14469,14469,14469,14469,prometheus_rules_api,

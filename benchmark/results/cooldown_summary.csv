@@ -1,0 +1,2 @@
+cooldown_seconds,duration_s,qps,injected_lines,raw_matches,alert_count,notification_count,reduction_ratio,notes
+60,300,5,1500,1000,1,4,0.996,

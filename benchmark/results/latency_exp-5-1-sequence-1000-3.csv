@@ -1,0 +1,4 @@
+exp_id,segment,P50_ms,P95_ms,P99_ms,n
+exp-5-1-sequence-1000-3,L1_inject_to_ack,99.4,101.4,104.7,20
+exp-5-1-sequence-1000-3,L2_ack_to_alert,31121.0,31121.0,31121.0,1
+exp-5-1-sequence-1000-3,L3_end_to_end,33126.5,33126.5,33126.5,1

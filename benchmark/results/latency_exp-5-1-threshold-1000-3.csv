@@ -1,0 +1,4 @@
+exp_id,segment,P50_ms,P95_ms,P99_ms,n
+exp-5-1-threshold-1000-3,L1_inject_to_ack,99.5,101.2,104.5,20
+exp-5-1-threshold-1000-3,L2_ack_to_alert,1165.7,1165.7,1165.7,1
+exp-5-1-threshold-1000-3,L3_end_to_end,3171.1,3171.1,3171.1,1

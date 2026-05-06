@@ -1,0 +1,7 @@
+replicas,total_rules,pods,balance_stddev,pod_name,my_rules,avg_elapsed_s,cycles
+1,100,1,0.0,logsentinel-engine-595699f9c9-mvwtn,108,3.0045,4
+2,100,2,0.037,logsentinel-engine-595699f9c9-mvwtn,53,1.8978,4
+2,100,2,0.037,logsentinel-engine-595699f9c9-xgmz9,55,1.891,4
+3,100,3,0.0,logsentinel-engine-595699f9c9-mprrn,36,1.2045,4
+3,100,3,0.0,logsentinel-engine-595699f9c9-mvwtn,36,1.0078,5
+3,100,3,0.0,logsentinel-engine-595699f9c9-xgmz9,36,1.1312,5
